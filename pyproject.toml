@@ -32,6 +32,9 @@ extract = [
 llm = [
     "ollama>=0.6.0",
 ]
+# MCP server bridge: exposes lean-memory as memory tools to MCP-compatible
+# agents (Claude Desktop, Claude Code). Optional — the core engine never imports mcp.
+mcp = ["mcp>=1.0"]
 # Terminal demo agent (examples/chat.py): Claude as the LLM via the anthropic SDK.
 examples = [
     "anthropic>=0.25",
@@ -39,6 +42,9 @@ examples = [
 dev = [
     "pytest>=8.0",
 ]
+
+[project.scripts]
+lean-memory-mcp = "lean_memory.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]
