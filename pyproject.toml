@@ -1,0 +1,48 @@
+[project]
+name = "lean-memory"
+version = "0.0.1"
+description = "Embedded, local-first agent-memory engine — Phase 0 spine (Store interface, SQLite vec0+FTS5, hybrid retrieval+rerank)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "lean-memory" }]
+dependencies = [
+    # Phase 0 spine: SQLite vec0 extension + sparse lexical + hybrid fusion.
+    # No mandatory cloud key, no LLM, no server. (Per design spec, Phase 0.)
+    "sqlite-vec>=0.1.6",
+    "bm25s>=0.2.0",
+    "numpy>=1.24",
+    "python-dateutil>=2.8",
+]
+
+[project.optional-dependencies]
+# Real local embedder + reranker (lazily installed; default tests use the
+# deterministic FakeEmbedder/IdentityReranker so the suite runs offline).
+models = [
+    "sentence-transformers>=3.0",
+    "torch>=2.2",
+]
+# Phase 1 real extraction backend (GLiNER2 candidate generation). Lazily loaded;
+# the default StubCandidateGenerator needs none of this.
+extract = [
+    "gliner2>=1.3.1",
+]
+# Phase 1 real LLM-typing backend (constrained typing via a local Ollama model).
+# The default StubTyper needs none of this and no running server.
+llm = [
+    "ollama>=0.6.0",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lean_memory"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
