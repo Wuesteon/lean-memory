@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lean-memory": {
+      "command": "lean-memory-mcp",
+      "args": [],
+      "env": {
+        "LM_DATA_ROOT": "~/.lean_memory"
+      }
+    }
+  }
+}

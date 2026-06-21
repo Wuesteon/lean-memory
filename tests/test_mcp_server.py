@@ -121,3 +121,18 @@ def test_namespace_path_sanitizes(server):
     p = server._namespace_path("a/b user")
     assert p.name == "a_b_user.db"
     assert p.parent == server.MEM.root
+
+
+import json
+
+EXAMPLE_CONFIG = Path(__file__).resolve().parents[1] / "examples" / "mcp_config.json"
+
+
+def test_example_config_is_valid_and_points_at_script():
+    data = json.loads(EXAMPLE_CONFIG.read_text())
+    servers = data["mcpServers"]
+    assert "lean-memory" in servers
+    entry = servers["lean-memory"]
+    assert entry["command"] == "lean-memory-mcp"
+    # LM_DATA_ROOT is documented in the example env block
+    assert "LM_DATA_ROOT" in entry.get("env", {})
