@@ -32,6 +32,10 @@ extract = [
 llm = [
     "ollama>=0.6.0",
 ]
+# Terminal demo agent (examples/chat.py): Claude as the LLM via the anthropic SDK.
+examples = [
+    "anthropic>=0.25",
+]
 dev = [
     "pytest>=8.0",
 ]
