@@ -202,3 +202,20 @@ def test_main_runs_one_turn_then_eof(tmp_path, monkeypatch, capsys):
     assert code == 0
     out = capsys.readouterr().out
     assert "Memory loaded" in out
+
+
+def test_memory_persists_across_restart(tmp_path):
+    """Same root + namespace → a fresh Memory still finds the earlier fact."""
+    chat = _load_chat()
+    client = _StubAnthropic()
+
+    mem1 = chat.make_memory(root=str(tmp_path), real=False)
+    chat.handle_turn(mem1, client, "demo", "I work at Acme.")
+    mem1.close()  # simulate process exit
+
+    mem2 = chat.make_memory(root=str(tmp_path), real=False)
+    try:
+        _, hits = chat.handle_turn(mem2, client, "demo", "where do I work?")
+        assert any("Acme" in h.fact.fact_text for h in hits)
+    finally:
+        mem2.close()
