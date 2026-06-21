@@ -107,3 +107,27 @@ def test_make_client_returns_none_without_key(monkeypatch):
     chat = _load_chat()
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     assert chat.make_client() is None
+
+
+from lean_memory.embed.fake import FakeEmbedder
+
+
+def test_make_memory_no_real_uses_fake_embedder(tmp_path):
+    chat = _load_chat()
+    mem = chat.make_memory(root=str(tmp_path), real=False)
+    try:
+        assert isinstance(mem.embedder, FakeEmbedder)
+    finally:
+        mem.close()
+
+
+def test_make_memory_no_real_roundtrips(tmp_path):
+    """make_memory must return a working Memory: add then search round-trips."""
+    chat = _load_chat()
+    mem = chat.make_memory(root=str(tmp_path), real=False)
+    try:
+        mem.add("demo", "I work at Acme.", t_ref=1_700_000_000_000)
+        hits = mem.search("demo", "where does the user work?", k=3)
+        assert any("Acme" in h.fact.fact_text for h in hits)
+    finally:
+        mem.close()

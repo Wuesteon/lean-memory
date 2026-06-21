@@ -84,3 +84,24 @@ def call_claude(client, system_prompt: str, user_message: str) -> str:
         messages=[{"role": "user", "content": user_message}],
     )
     return resp.content[0].text
+
+
+def make_memory(root: str, real: bool) -> Memory:
+    """Construct the Memory engine. real=False forces the offline stubs."""
+    if not real:
+        return Memory(root=root)  # FakeEmbedder + IdentityReranker by default
+    try:
+        from lean_memory.embed.sentence_transformer import SentenceTransformerEmbedder
+        from lean_memory.retrieve.rerank import CrossEncoderReranker
+    except ImportError:
+        print(
+            "[warn] real backends need the 'models' extra "
+            "(pip install 'lean-memory[models]'). Using offline stubs.",
+            file=sys.stderr,
+        )
+        return Memory(root=root)
+    return Memory(
+        root=root,
+        embedder=SentenceTransformerEmbedder(),
+        reranker=CrossEncoderReranker(),
+    )
