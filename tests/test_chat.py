@@ -7,8 +7,12 @@ All tests run with FakeEmbedder + a stubbed Anthropic client — no network, no
 from __future__ import annotations
 
 import importlib.util
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib  # type: ignore[no-redef]
 
 _PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 _CHAT_PATH = Path(__file__).resolve().parent.parent / "examples" / "chat.py"
