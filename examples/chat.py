@@ -121,3 +121,57 @@ def handle_turn(mem, client, namespace: str, user_message: str):
     system_prompt = build_system_prompt(memory_block)
     reply = call_claude(client, system_prompt, user_message)
     return reply, hits
+
+
+def parse_args(argv):
+    p = argparse.ArgumentParser(description="lean-memory terminal demo agent")
+    p.add_argument(
+        "--namespace", default=DEFAULT_NAMESPACE,
+        help="memory tenant id (persists across restarts); default 'demo'",
+    )
+    p.add_argument(
+        "--root", default=DEFAULT_ROOT,
+        help="directory for the per-namespace SQLite files",
+    )
+    p.add_argument(
+        "--no-real", dest="real", action="store_false",
+        help="use offline FakeEmbedder/IdentityReranker (zero downloads)",
+    )
+    p.set_defaults(real=True)
+    return p.parse_args(argv)
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv if argv is not None else sys.argv[1:])
+    mem = make_memory(root=args.root, real=args.real)
+    client = make_client()
+    if client is None:
+        print(
+            "[warn] running without Claude (no ANTHROPIC_API_KEY); replies echo "
+            "the memory context.",
+            file=sys.stderr,
+        )
+    print(
+        f"lean-memory demo — namespace={args.namespace!r}, root={args.root!r}. "
+        "Type 'exit' or Ctrl-D to quit."
+    )
+    try:
+        while True:
+            try:
+                user_message = input("you> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            if not user_message:
+                continue
+            if user_message.lower() in {"exit", "quit"}:
+                break
+            reply, _ = handle_turn(mem, client, args.namespace, user_message)
+            print(f"bot> {reply}\n")
+    finally:
+        mem.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

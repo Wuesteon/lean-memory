@@ -169,3 +169,36 @@ def test_handle_turn_supersession_changes_answer(tmp_path):
         assert "Acme" not in texts
     finally:
         mem.close()
+
+
+def test_parse_args_defaults():
+    chat = _load_chat()
+    args = chat.parse_args([])
+    assert args.namespace == "demo"
+    assert args.real is True  # real backends by default
+
+
+def test_parse_args_no_real_and_namespace():
+    chat = _load_chat()
+    args = chat.parse_args(["--no-real", "--namespace", "bob"])
+    assert args.real is False
+    assert args.namespace == "bob"
+
+
+def test_main_runs_one_turn_then_eof(tmp_path, monkeypatch, capsys):
+    chat = _load_chat()
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)  # echo mode, offline
+
+    lines = iter(["I work at Acme.", EOFError])
+
+    def fake_input(prompt=""):
+        nxt = next(lines)
+        if nxt is EOFError:
+            raise EOFError
+        return nxt
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    code = chat.main(["--no-real", "--root", str(tmp_path), "--namespace", "demo"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "Memory loaded" in out
