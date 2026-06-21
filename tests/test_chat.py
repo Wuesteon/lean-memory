@@ -131,3 +131,41 @@ def test_make_memory_no_real_roundtrips(tmp_path):
         assert any("Acme" in h.fact.fact_text for h in hits)
     finally:
         mem.close()
+
+
+def test_handle_turn_stores_then_retrieves_and_prints(tmp_path, capsys):
+    chat = _load_chat()
+    mem = chat.make_memory(root=str(tmp_path), real=False)
+    client = _StubAnthropic()
+    try:
+        # Turn 1: teach a fact.
+        reply1, hits1 = chat.handle_turn(mem, client, "demo", "I work at Acme.")
+        assert reply1 == "stubbed reply"
+        # Turn 2: ask about it — the fact must be retrieved and printed.
+        reply2, hits2 = chat.handle_turn(
+            mem, client, "demo", "where do I work?"
+        )
+        assert any("Acme" in h.fact.fact_text for h in hits2)
+        out = capsys.readouterr().out
+        assert "Memory loaded" in out
+        assert "Acme" in out
+        # The system prompt sent to Claude carried the memory block.
+        assert "Acme" in client.calls["system"]
+    finally:
+        mem.close()
+
+
+def test_handle_turn_supersession_changes_answer(tmp_path):
+    """Update the fact in a later turn → search returns only the new employer."""
+    chat = _load_chat()
+    mem = chat.make_memory(root=str(tmp_path), real=False)
+    client = _StubAnthropic()
+    try:
+        chat.handle_turn(mem, client, "demo", "I work at Acme.")
+        chat.handle_turn(mem, client, "demo", "I work at Globex now.")
+        _, hits = chat.handle_turn(mem, client, "demo", "where do I work?")
+        texts = " ".join(h.fact.fact_text for h in hits)
+        assert "Globex" in texts
+        assert "Acme" not in texts
+    finally:
+        mem.close()

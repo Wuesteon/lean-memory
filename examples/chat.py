@@ -105,3 +105,19 @@ def make_memory(root: str, real: bool) -> Memory:
         embedder=SentenceTransformerEmbedder(),
         reranker=CrossEncoderReranker(),
     )
+
+
+def handle_turn(mem, client, namespace: str, user_message: str):
+    """One full turn: store, retrieve, show what loaded, answer."""
+    mem.add(namespace, user_message)  # t_ref defaults to now_ms() inside Memory
+    hits = mem.search(namespace, user_message, k=3)
+
+    # Make the engine visible: print exactly what memory was loaded.
+    print(f"  [Memory loaded ({len(hits)}):]")
+    for h in hits:
+        print(f"    • {h.fact.fact_text}  [score={h.final_score:.3f}]")
+
+    memory_block = format_memory_block(hits)
+    system_prompt = build_system_prompt(memory_block)
+    reply = call_claude(client, system_prompt, user_message)
+    return reply, hits
