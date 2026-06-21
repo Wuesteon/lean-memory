@@ -48,3 +48,39 @@ def build_system_prompt(memory_block: str) -> str:
         "question, rely on it. Do not invent facts that are not listed.\n\n"
         f"{memory_block}"
     )
+
+
+def make_client():
+    """Build a real Anthropic client, or None if unusable (offline-safe).
+
+    `anthropic` is imported lazily here so the module imports without the
+    package installed (tests stub the client and never import this path).
+    """
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        print(
+            "[warn] anthropic SDK not installed; run "
+            "pip install 'lean-memory[examples]'. Falling back to echo mode.",
+            file=sys.stderr,
+        )
+        return None
+    return anthropic.Anthropic()
+
+
+def call_claude(client, system_prompt: str, user_message: str) -> str:
+    """Get an assistant reply. With no client, echo the memory context instead."""
+    if client is None:
+        return (
+            "[no ANTHROPIC_API_KEY] I'd answer using the memory below, but no "
+            f"API key is set, so here is the context I loaded:\n\n{system_prompt}"
+        )
+    resp = client.messages.create(
+        model=MODEL,
+        max_tokens=512,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_message}],
+    )
+    return resp.content[0].text
