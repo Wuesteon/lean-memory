@@ -39,6 +39,10 @@ mcp = ["mcp>=1.0"]
 examples = [
     "anthropic>=0.25",
 ]
+# Phase 2 benchmark harness (bench/phase2_*.py): OpenRouter reader/judge client.
+bench = [
+    "openai>=1.40",
+]
 dev = [
     "pytest>=8.0",
     "tomli>=2.0; python_version < \"3.11\"",

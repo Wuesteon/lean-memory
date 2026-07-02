@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.superpowers/
+bench/.phase2_cache/
