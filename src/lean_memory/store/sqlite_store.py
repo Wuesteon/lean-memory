@@ -215,23 +215,33 @@ class SqliteStore(Store):
         return [(fid, d) for fid, d in scored if fid in valid]
 
     def sparse_search(
-        self, query_text: str, k: int, *, is_latest_only: bool = True
+        self, query_text: str, k: int, *, is_latest_only: bool = True,
+        as_of: Optional[int] = None,
     ) -> list[tuple[str, float]]:
         # FTS5 BM25: lower bm25() is better, so we negate to "higher is better".
+        needs_row_check = is_latest_only or as_of is not None
         rows = self._db.execute(
             """SELECT f.fact_id AS fact_id, bm25(fact_fts) AS score
                FROM fact_fts f
                WHERE fact_fts MATCH ?
                ORDER BY score LIMIT ?""",
-            (_fts_query(query_text), k * (2 if is_latest_only else 1)),
+            (_fts_query(query_text), k * (2 if needs_row_check else 1)),
         ).fetchall()
         out: list[tuple[str, float]] = []
         for r in rows:
-            if is_latest_only:
-                live = self._db.execute(
-                    "SELECT is_latest FROM fact WHERE id=?", (r["fact_id"],)
+            if needs_row_check:
+                row = self._db.execute(
+                    "SELECT is_latest, valid_at, valid_to FROM fact WHERE id=?",
+                    (r["fact_id"],),
                 ).fetchone()
-                if not live or not live["is_latest"]:
+                if not row:
+                    continue
+                if is_latest_only and not row["is_latest"]:
+                    continue
+                if as_of is not None and not (
+                    row["valid_at"] <= as_of
+                    and (row["valid_to"] is None or row["valid_to"] > as_of)
+                ):
                     continue
             out.append((r["fact_id"], -float(r["score"])))
             if len(out) >= k:

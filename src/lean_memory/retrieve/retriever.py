@@ -53,7 +53,9 @@ class Retriever:
             q_coarse, q_full, OVER_RETRIEVE,
             is_latest_only=is_latest_only, as_of=as_of,
         )
-        sparse = self.store.sparse_search(query, OVER_RETRIEVE, is_latest_only=is_latest_only)
+        sparse = self.store.sparse_search(
+            query, OVER_RETRIEVE, is_latest_only=is_latest_only, as_of=as_of,
+        )
 
         # 4. RRF fuse (k=10). score(d) = Σ 1/(k + rank_i(d)), rank 1-based.
         ranks: dict[str, dict[str, int]] = {}

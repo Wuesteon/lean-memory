@@ -66,9 +66,11 @@ class Store(ABC):
 
     @abstractmethod
     def sparse_search(
-        self, query_text: str, k: int, *, is_latest_only: bool = True
+        self, query_text: str, k: int, *, is_latest_only: bool = True,
+        as_of: Optional[int] = None,
     ) -> list[tuple[str, float]]:
-        """BM25 lexical search. Returns [(fact_id, score)] best-first."""
+        """BM25 lexical search. Returns [(fact_id, score)] best-first.
+        as_of applies the same interval predicate as the dense arm."""
 
     @abstractmethod
     def hydrate(self, fact_ids: Sequence[str]) -> dict[str, Fact]:
