@@ -50,3 +50,38 @@ def test_lme_expect_counts_aborts_on_fixture():
     import pytest
     with pytest.raises(DatasetError):
         load_longmemeval(FIXTURES / "lme_s_mini.json", expect_counts=True)
+
+
+from phase2_ingest import load_locomo, parse_locomo_timestamp
+
+
+def test_locomo_loads_conversation_unit():
+    units = load_locomo(FIXTURES / "locomo_mini.json")
+    assert len(units) == 1
+    u = units[0]
+    assert u.namespace == "conv-mini"
+    assert len(u.turns) == 3
+    assert u.turns[0].text == "Caroline: I'm thinking about moving out of Portland."
+    assert u.turns[0].source == "Caroline"
+    assert u.turns[0].t_ref == parse_locomo_timestamp("1:56 pm on 8 May, 2023")
+    assert u.turns[1].t_ref == u.turns[0].t_ref + 1_000
+    # image turn carries the caption on its own line
+    assert u.turns[2].text == (
+        "Caroline: I finally moved to Seattle last week!\n"
+        "Caroline shared a photo: a moving truck"
+    )
+    # slice "all" keeps categories 1-4 only (adversarial excluded)
+    assert [q.category for q in u.questions] == [2, 4]
+    assert u.questions[0].question_id == "conv-mini_q000"
+    assert u.questions[0].question_type == "temporal"
+
+
+def test_locomo_temporal_slice():
+    units = load_locomo(FIXTURES / "locomo_mini.json", slice="temporal")
+    assert [q.category for q in units[0].questions] == [2]
+
+
+def test_locomo_expect_counts_aborts_on_fixture():
+    import pytest
+    with pytest.raises(DatasetError):
+        load_locomo(FIXTURES / "locomo_mini.json", expect_counts=True)

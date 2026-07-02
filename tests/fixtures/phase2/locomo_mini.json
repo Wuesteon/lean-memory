@@ -1,0 +1,23 @@
+[
+  {
+    "sample_id": "conv-mini",
+    "qa": [
+      {"question": "Where did Caroline move to?", "answer": "Seattle", "category": 2, "evidence": ["D2:1"]},
+      {"question": "What does Melanie paint?", "answer": "landscapes", "category": 4, "evidence": ["D1:2"]},
+      {"question": "What is Caroline's dog's name?", "adversarial_answer": "No information available", "category": 5, "evidence": []}
+    ],
+    "conversation": {
+      "speaker_a": "Caroline",
+      "speaker_b": "Melanie",
+      "session_1_date_time": "1:56 pm on 8 May, 2023",
+      "session_1": [
+        {"speaker": "Caroline", "dia_id": "D1:1", "text": "I'm thinking about moving out of Portland."},
+        {"speaker": "Melanie", "dia_id": "D1:2", "text": "I spent the weekend painting landscapes."}
+      ],
+      "session_2_date_time": "7:55 pm on 9 June, 2023",
+      "session_2": [
+        {"speaker": "Caroline", "dia_id": "D2:1", "text": "I finally moved to Seattle last week!", "img_url": ["http://example.com/1.jpg"], "blip_caption": "a moving truck"}
+      ]
+    }
+  }
+]

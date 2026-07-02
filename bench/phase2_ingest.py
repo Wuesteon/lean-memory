@@ -190,3 +190,55 @@ def load_longmemeval(path: Path, slice: str = "all", expect_counts: bool = False
     if expect_counts and slice == "ku" and len(units) != LME_KU_QUESTIONS:
         raise DatasetError(f"expected {LME_KU_QUESTIONS} KU questions, got {len(units)}")
     return units
+
+
+# ── LoCoMo ──
+
+LOCOMO_CATEGORY_NAMES = {1: "multi-hop", 2: "temporal", 3: "open-domain", 4: "single-hop", 5: "adversarial"}
+LOCOMO_CATEGORY_ANCHORS = {1: 282, 2: 321, 3: 96, 4: 841, 5: 446}
+LOCOMO_CONVS = 10
+_SESSION_KEY = re.compile(r"^session_(\d+)$")
+
+
+def load_locomo(path: Path, slice: str = "all", expect_counts: bool = False) -> list[IngestUnit]:
+    data = json.loads(Path(path).read_text())
+    if expect_counts:
+        if len(data) != LOCOMO_CONVS:
+            raise DatasetError(f"expected {LOCOMO_CONVS} conversations, got {len(data)}")
+        counts: dict[int, int] = {}
+        for conv in data:
+            for qa in conv["qa"]:
+                counts[qa["category"]] = counts.get(qa["category"], 0) + 1
+        if counts != LOCOMO_CATEGORY_ANCHORS:
+            raise DatasetError(f"category counts {counts} != anchors {LOCOMO_CATEGORY_ANCHORS}")
+    wanted = {2} if slice == "temporal" else {1, 2, 3, 4}
+    units: list[IngestUnit] = []
+    for conv in data:
+        c = conv["conversation"]
+        sessions = sorted(
+            (int(m.group(1)) for key in c if (m := _SESSION_KEY.match(key))),
+        )
+        turns: list[Turn] = []
+        for n in sessions:
+            date_key = f"session_{n}_date_time"
+            if date_key not in c:
+                raise DatasetError(f"{conv['sample_id']}: missing {date_key}")
+            t0 = parse_locomo_timestamp(c[date_key])
+            for j, d in enumerate(c[f"session_{n}"]):
+                text = f"{d['speaker']}: {d['text']}"
+                if d.get("blip_caption"):
+                    text += f"\n{d['speaker']} shared a photo: {d['blip_caption']}"
+                turns.append(Turn(text=text, t_ref=t0 + j * _TURN_STEP_MS, source=d["speaker"]))
+        questions = [
+            Question(
+                question_id=f"{conv['sample_id']}_q{i:03d}",
+                question_type=LOCOMO_CATEGORY_NAMES[qa["category"]],
+                question=qa["question"],
+                gold=str(qa.get("answer", qa.get("adversarial_answer", ""))),
+                category=qa["category"],
+            )
+            for i, qa in enumerate(conv["qa"])
+            if qa["category"] in wanted
+        ]
+        units.append(IngestUnit(namespace=conv["sample_id"], turns=turns, questions=questions))
+    return units
