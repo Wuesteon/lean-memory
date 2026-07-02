@@ -78,9 +78,10 @@ def openrouter_chat(model: str, messages: list[dict], *, temperature: float = 0.
             if content is None:
                 raise BackendUnavailable(f"{model} returned empty content")
             return content
-        except (openai.RateLimitError, openai.APIConnectionError, openai.APIError) as exc:
+        except (openai.RateLimitError, openai.APIConnectionError, openai.InternalServerError) as exc:
             last = exc
-            time.sleep(2**attempt)
+            if attempt < _MAX_TRANSPORT_RETRIES - 1:
+                time.sleep(2**attempt)
     raise BackendUnavailable(f"OpenRouter unreachable after {_MAX_TRANSPORT_RETRIES} tries: {last}")
 
 
