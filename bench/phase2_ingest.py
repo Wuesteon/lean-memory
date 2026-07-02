@@ -242,3 +242,144 @@ def load_locomo(path: Path, slice: str = "all", expect_counts: bool = False) -> 
         ]
         units.append(IngestUnit(namespace=conv["sample_id"], turns=turns, questions=questions))
     return units
+
+
+# ── memory factory + cached ingest ──
+
+import sqlite3  # noqa: E402
+import time  # noqa: E402
+
+from lean_memory.memory import Memory  # noqa: E402
+
+DEFAULT_EMBEDDER = "Qwen/Qwen3-Embedding-0.6B"
+DEFAULT_TYPER_MODEL = "qwen2.5:3b"
+DEFAULT_GENERATOR_MODEL = "fastino/gliner2-base-v1"
+DEFAULT_RERANKER_MODEL = "cross-encoder/ettin-reranker-32m-v1"
+
+
+def build_memory(root: Path, *, real: bool, embedder_name: str = DEFAULT_EMBEDDER) -> Memory:
+    """Offline: every backend is the deterministic stub (plumbing only).
+    Real: the full production stack; router/contradiction keep frozen defaults."""
+    if not real:
+        return Memory(root=root)
+    from lean_memory.embed.sentence_transformer import SentenceTransformerEmbedder
+    from lean_memory.extract.gliner_extractor import Gliner2Generator
+    from lean_memory.extract.llm_typer import OllamaTyper
+    from lean_memory.retrieve.rerank import CrossEncoderReranker
+
+    return Memory(
+        root=root,
+        embedder=SentenceTransformerEmbedder(embedder_name),
+        reranker=CrossEncoderReranker(),
+        generator=Gliner2Generator(),
+        typer=OllamaTyper(DEFAULT_TYPER_MODEL),
+    )
+
+
+def preflight_real() -> None:
+    """Abort with guidance (never mid-ingest) when Ollama is down."""
+    from bet2_ablation import BackendUnavailable
+
+    try:
+        import ollama
+
+        ollama.list()
+    except Exception as exc:  # noqa: BLE001 — any transport failure = unavailable
+        raise BackendUnavailable(
+            f"ollama unreachable: {exc}\n  Start it first:  ollama serve  &&  ollama pull {DEFAULT_TYPER_MODEL}"
+        ) from exc
+
+
+def _percentile(xs: list[float], p: float) -> float:
+    if not xs:
+        return 0.0
+    ys = sorted(xs)
+    i = min(len(ys) - 1, int(round(p * (len(ys) - 1))))
+    return ys[i]
+
+
+def _count_supersessions(db_path: Path) -> int:
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as db:
+        return db.execute(
+            "SELECT COUNT(*) FROM fact WHERE superseded_by IS NOT NULL"
+        ).fetchone()[0]
+
+
+def ingest_units(
+    units: list[IngestUnit],
+    cache_dir: Path,
+    *,
+    real: bool,
+    embedder_name: str = DEFAULT_EMBEDDER,
+    limit: Optional[int] = None,
+) -> dict:
+    from lean_memory.extract.llm_typer import TyperError
+    from bet2_ablation import BackendUnavailable
+    from lean_memory.memory import _SAFE_NS
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = cache_dir / "manifest.json"
+    engine = {"real": real, "embedder": embedder_name if real else "FakeEmbedder",
+              "generator": DEFAULT_GENERATOR_MODEL if real else "StubCandidateGenerator",
+              "typer": DEFAULT_TYPER_MODEL if real else "StubTyper"}
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {
+        "engine": engine, "namespaces": {}}
+    if manifest["engine"] != engine:
+        raise DatasetError(
+            f"cache {cache_dir} was built with engine {manifest['engine']}, requested {engine} — use a fresh cache dir")
+
+    if real:
+        preflight_real()
+    mem = build_memory(cache_dir, real=real, embedder_name=embedder_name)
+    try:
+        todo = [u for u in units if not manifest["namespaces"].get(u.namespace, {}).get("done")]
+        for u in todo[: limit if limit is not None else len(todo)]:
+            base = dict(mem.router.cumulative_stats)
+            add_ms: list[float] = []
+            facts = 0
+            for turn in u.turns:
+                t0 = time.perf_counter()
+                try:
+                    facts += len(mem.add(u.namespace, turn.text, t_ref=turn.t_ref, source=turn.source))
+                except TyperError as exc:
+                    raise BackendUnavailable(
+                        f"typer died mid-ingest on {u.namespace}: {exc}\n"
+                        f"  Restart ollama and re-run — completed namespaces are cached."
+                    ) from exc
+                add_ms.append((time.perf_counter() - t0) * 1000)
+            cur = mem.router.cumulative_stats
+            db_path = cache_dir / f"{_SAFE_NS.sub('_', u.namespace) or 'default'}.db"
+            manifest["namespaces"][u.namespace] = {
+                "done": True,
+                "turns": len(u.turns),
+                "facts": facts,
+                "supersessions": _count_supersessions(db_path),
+                "escalated": cur.get("escalated", 0) - base.get("escalated", 0),
+                "seen": cur.get("seen", 0) - base.get("seen", 0),
+                "add_ms_p50": round(_percentile(add_ms, 0.50), 2),
+                "add_ms_p95": round(_percentile(add_ms, 0.95), 2),
+            }
+            tmp = manifest_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(manifest, indent=1))
+            tmp.replace(manifest_path)
+            print(f"ingested {u.namespace}: {len(u.turns)} turns → {facts} facts")
+    finally:
+        mem.close()
+    return manifest
+
+
+if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Download + validate Phase 2 datasets.")
+    ap.add_argument("--data-dir", default=str(_BENCH / ".phase2_cache" / "data"))
+    ap.add_argument("--datasets", default="locomo10,lme_oracle,lme_s")
+    args = ap.parse_args()
+    for name in args.datasets.split(","):
+        path, sha = ensure_dataset(name, Path(args.data_dir))
+        if name == "locomo10":
+            n = sum(len(u.questions) for u in load_locomo(path, expect_counts=True))
+            print(f"{name}: sha256 {sha[:16]}  OK  ({n} scorable questions)")
+        else:
+            ku = load_longmemeval(path, slice="ku", expect_counts=True)
+            print(f"{name}: sha256 {sha[:16]}  OK  ({len(ku)} KU questions)")

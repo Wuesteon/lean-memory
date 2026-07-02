@@ -85,3 +85,26 @@ def test_locomo_expect_counts_aborts_on_fixture():
     import pytest
     with pytest.raises(DatasetError):
         load_locomo(FIXTURES / "locomo_mini.json", expect_counts=True)
+
+
+import json
+
+
+def test_offline_ingest_cache_and_resume(tmp_path):
+    from phase2_ingest import build_memory, ingest_units, load_longmemeval
+
+    units = load_longmemeval(FIXTURES / "lme_s_mini.json")
+    cache = tmp_path / "cache"
+    m1 = ingest_units(units, cache, real=False)
+    assert set(m1["namespaces"]) == {"ku_001", "ms_001_abs"}
+    assert all(v["done"] for v in m1["namespaces"].values())
+    assert (cache / "manifest.json").exists()
+    assert (cache / "ku_001.db").exists()
+    # resume: second call must not re-ingest (facts counters unchanged)
+    m2 = ingest_units(units, cache, real=False)
+    assert m2["namespaces"] == m1["namespaces"]
+    # searchable through the public API
+    mem = build_memory(cache, real=False)
+    hits = mem.search("ku_001", "where does the user work", k=3)
+    mem.close()
+    assert isinstance(hits, list)
