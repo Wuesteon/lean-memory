@@ -1,0 +1,26 @@
+[
+  {
+    "question_id": "ku_001",
+    "question_type": "knowledge-update",
+    "question": "Where does the user work now?",
+    "answer": "Quandril",
+    "question_date": "2023/06/01 (Thu) 10:00",
+    "haystack_dates": ["2023/04/10 (Mon) 23:07", "2023/05/20 (Sat) 11:30"],
+    "haystack_sessions": [
+      {
+        "session_id": "s1",
+        "turns": [
+          {"role": "user", "content": "I just started working at Zorbex."},
+          {"role": "assistant", "content": "Congrats on the Zorbex job!"}
+        ]
+      },
+      {
+        "session_id": "s2",
+        "turns": [
+          {"role": "user", "content": "I left Zorbex and now I work at Quandril."}
+        ]
+      }
+    ],
+    "answer_session_ids": ["s2"]
+  }
+]

@@ -123,3 +123,70 @@ def ensure_dataset(name: str, data_dir: Path) -> tuple[Path, str]:
     else:
         sha_path.write_text(sha)
     return path, sha
+
+
+# ── LongMemEval ──
+
+LME_TOTAL_QUESTIONS = 500
+LME_KU_QUESTIONS = 78
+_TURN_STEP_MS = 1_000  # +1s per turn inside a session: supersession order is defined
+
+
+def _lme_sessions(entry: dict) -> list[tuple[str, Optional[str], list[dict]]]:
+    """Normalize both on-disk shapes → [(session_id, date_str|None, turns)]."""
+    ids = entry.get("haystack_session_ids") or []
+    dates = entry.get("haystack_dates") or []
+    out = []
+    for i, item in enumerate(entry["haystack_sessions"]):
+        if isinstance(item, list):  # _s shape: the entry IS the turn list
+            sid = ids[i] if i < len(ids) else f"{entry['question_id']}_s{i}"
+            turns = item
+        elif isinstance(item, dict) and isinstance(item.get("turns"), list):
+            sid = item.get("session_id") or f"{entry['question_id']}_s{i}"
+            turns = item["turns"]
+        else:
+            raise DatasetError(f"{entry['question_id']}: malformed haystack session #{i}")
+        out.append((sid, dates[i] if i < len(dates) else None, turns))
+    return out
+
+
+def load_longmemeval(path: Path, slice: str = "all", expect_counts: bool = False) -> list[IngestUnit]:
+    data = json.loads(Path(path).read_text())
+    if expect_counts and len(data) != LME_TOTAL_QUESTIONS:
+        raise DatasetError(f"expected {LME_TOTAL_QUESTIONS} LME questions, got {len(data)}")
+    units: list[IngestUnit] = []
+    for entry in data:
+        q = Question(
+            question_id=entry["question_id"],
+            question_type=entry["question_type"],
+            question=entry["question"],
+            gold=str(entry["answer"]),
+            question_date=entry.get("question_date", ""),
+            is_abstention=entry["question_id"].endswith("_abs"),
+        )
+        if slice == "ku" and q.question_type != "knowledge-update":
+            continue
+        sessions = []
+        prev_t0: Optional[int] = None
+        for sid, date, sturns in _lme_sessions(entry):
+            if date:
+                t0 = parse_lme_timestamp(date)
+            elif prev_t0 is not None:
+                t0 = prev_t0 + 3_600_000  # dateless session: 1h after the previous
+            elif q.question_date:
+                t0 = parse_lme_timestamp(q.question_date) - 86_400_000 * len(entry["haystack_sessions"])
+            else:
+                raise DatasetError(f"{q.question_id}: session {sid} has no usable date")
+            prev_t0 = t0
+            sessions.append((t0, sturns))
+        # oracle variant is NOT time-sorted; _s is. Sorting is a no-op for _s.
+        sessions.sort(key=lambda x: x[0])
+        turns = [
+            Turn(text=t["content"], t_ref=t0 + j * _TURN_STEP_MS, source=t["role"])
+            for t0, sturns in sessions
+            for j, t in enumerate(sturns)
+        ]
+        units.append(IngestUnit(namespace=q.question_id, turns=turns, questions=[q]))
+    if expect_counts and slice == "ku" and len(units) != LME_KU_QUESTIONS:
+        raise DatasetError(f"expected {LME_KU_QUESTIONS} KU questions, got {len(units)}")
+    return units

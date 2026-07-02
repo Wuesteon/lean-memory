@@ -1,0 +1,36 @@
+[
+  {
+    "question_id": "ku_001",
+    "question_type": "knowledge-update",
+    "question": "Where does the user work now?",
+    "answer": "Quandril",
+    "question_date": "2023/06/01 (Thu) 10:00",
+    "haystack_session_ids": ["s1", "s2"],
+    "haystack_dates": ["2023/04/10 (Mon) 23:07", "2023/05/20 (Sat) 11:30"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I just started working at Zorbex."},
+        {"role": "assistant", "content": "Congrats on the Zorbex job!"}
+      ],
+      [
+        {"role": "user", "content": "I left Zorbex and now I work at Quandril."}
+      ]
+    ],
+    "answer_session_ids": ["s2"]
+  },
+  {
+    "question_id": "ms_001_abs",
+    "question_type": "multi-session",
+    "question": "What color is the user's bike?",
+    "answer": "The user never mentioned owning a bike.",
+    "question_date": "2023/06/02 (Fri) 09:00",
+    "haystack_session_ids": ["s3"],
+    "haystack_dates": ["2023/04/11 (Tue) 08:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I love hiking near the coast."}
+      ]
+    ],
+    "answer_session_ids": []
+  }
+]
