@@ -108,3 +108,19 @@ def test_offline_ingest_cache_and_resume(tmp_path):
     hits = mem.search("ku_001", "where does the user work", k=3)
     mem.close()
     assert isinstance(hits, list)
+
+
+def test_remote_typer_env_wiring(monkeypatch):
+    from phase2_ingest import build_typer
+
+    monkeypatch.delenv("PHASE2_OLLAMA_HOST", raising=False)
+    local = build_typer()
+    assert type(local).__name__ == "OllamaTyper" and local.host is None
+
+    monkeypatch.setenv("PHASE2_OLLAMA_HOST", "https://example.hf.space")
+    monkeypatch.setenv("PHASE2_OLLAMA_TOKEN", "hf_test")
+    remote = build_typer()
+    assert remote.host == "https://example.hf.space"
+    client = remote._get_client()  # constructs, does not connect
+    assert client._client.headers["authorization"] == "Bearer hf_test"
+    assert remote.model == "qwen2.5:3b"

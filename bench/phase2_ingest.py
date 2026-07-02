@@ -256,6 +256,41 @@ DEFAULT_TYPER_MODEL = "qwen2.5:3b"
 DEFAULT_GENERATOR_MODEL = "fastino/gliner2-base-v1"
 DEFAULT_RERANKER_MODEL = "cross-encoder/ettin-reranker-32m-v1"
 
+# Remote typer host (e.g. an HF Space running the SAME ollama runtime + blob).
+# Set PHASE2_OLLAMA_HOST to offload the typing pass; PHASE2_OLLAMA_TOKEN adds a
+# bearer header for private hosts. Recorded in the manifest engine dict so a
+# cache ingested against one host can never silently continue on another.
+import os  # noqa: E402
+
+
+def typer_host() -> Optional[str]:
+    return os.environ.get("PHASE2_OLLAMA_HOST") or None
+
+
+def _typer_headers() -> Optional[dict]:
+    tok = os.environ.get("PHASE2_OLLAMA_TOKEN")
+    return {"Authorization": f"Bearer {tok}"} if tok else None
+
+
+def build_typer():
+    from lean_memory.extract.llm_typer import OllamaTyper
+
+    host = typer_host()
+    if not host:
+        return OllamaTyper(DEFAULT_TYPER_MODEL)
+
+    class RemoteOllamaTyper(OllamaTyper):
+        """Same model, same constrained decode — only transport differs."""
+
+        def _get_client(self):
+            if self._client is None:
+                import ollama
+
+                self._client = ollama.Client(host=self.host, headers=_typer_headers())
+            return self._client
+
+    return RemoteOllamaTyper(DEFAULT_TYPER_MODEL, host=host)
+
 
 def build_memory(root: Path, *, real: bool, embedder_name: str = DEFAULT_EMBEDDER) -> Memory:
     """Offline: every backend is the deterministic stub (plumbing only).
@@ -264,7 +299,6 @@ def build_memory(root: Path, *, real: bool, embedder_name: str = DEFAULT_EMBEDDE
         return Memory(root=root)
     from lean_memory.embed.sentence_transformer import SentenceTransformerEmbedder
     from lean_memory.extract.gliner_extractor import Gliner2Generator
-    from lean_memory.extract.llm_typer import OllamaTyper
     from lean_memory.retrieve.rerank import CrossEncoderReranker
 
     return Memory(
@@ -272,21 +306,36 @@ def build_memory(root: Path, *, real: bool, embedder_name: str = DEFAULT_EMBEDDE
         embedder=SentenceTransformerEmbedder(embedder_name),
         reranker=CrossEncoderReranker(),
         generator=Gliner2Generator(),
-        typer=OllamaTyper(DEFAULT_TYPER_MODEL),
+        typer=build_typer(),
     )
 
 
+def typer_digest(client=None) -> str:
+    """Manifest digest of the typer model as served — the byte-level pin."""
+    import ollama
+
+    client = client or (
+        ollama.Client(host=typer_host(), headers=_typer_headers()) if typer_host() else ollama
+    )
+    for m in client.list().models:
+        if m.model == DEFAULT_TYPER_MODEL:
+            return m.digest
+    raise KeyError(f"{DEFAULT_TYPER_MODEL} not present on typer host")
+
+
 def preflight_real() -> None:
-    """Abort with guidance (never mid-ingest) when Ollama is down."""
+    """Abort with guidance (never mid-ingest) when the typer backend is down."""
     from bet2_ablation import BackendUnavailable
 
+    host = typer_host()
     try:
-        import ollama
-
-        ollama.list()
+        typer_digest()
     except Exception as exc:  # noqa: BLE001 — any transport failure = unavailable
+        where = host or "local ollama"
         raise BackendUnavailable(
-            f"ollama unreachable: {exc}\n  Start it first:  ollama serve  &&  ollama pull {DEFAULT_TYPER_MODEL}"
+            f"typer backend unreachable ({where}): {exc}\n"
+            f"  Local:  ollama serve  &&  ollama pull {DEFAULT_TYPER_MODEL}\n"
+            f"  Remote: check the host is up and PHASE2_OLLAMA_TOKEN is valid"
         ) from exc
 
 
@@ -322,14 +371,15 @@ def ingest_units(
     engine = {"real": real, "embedder": embedder_name if real else "FakeEmbedder",
               "generator": DEFAULT_GENERATOR_MODEL if real else "StubCandidateGenerator",
               "typer": DEFAULT_TYPER_MODEL if real else "StubTyper"}
+    if real:
+        preflight_real()  # also validates the typer host before we pin it below
+        engine["typer_host"] = typer_host() or "local"
+        engine["typer_digest"] = typer_digest()
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {
         "engine": engine, "namespaces": {}}
     if manifest["engine"] != engine:
         raise DatasetError(
             f"cache {cache_dir} was built with engine {manifest['engine']}, requested {engine} — use a fresh cache dir")
-
-    if real:
-        preflight_real()
     mem = build_memory(cache_dir, real=real, embedder_name=embedder_name)
     try:
         todo = [u for u in units if not manifest["namespaces"].get(u.namespace, {}).get("done")]
