@@ -289,6 +289,19 @@ def build_typer():
                 self._client = ollama.Client(host=self.host, headers=_typer_headers())
             return self._client
 
+        def type_candidates(self, *args, **kwargs):
+            from lean_memory.extract.llm_typer import TyperError
+
+            try:
+                return super().type_candidates(*args, **kwargs)
+            except TyperError as exc:
+                if "not found" not in str(exc):
+                    raise
+                # The remote host restarted and lost its ephemeral model —
+                # re-pull once (blob is digest-pinned) and retry.
+                self._get_client().pull(self.model)
+                return super().type_candidates(*args, **kwargs)
+
     return RemoteOllamaTyper(DEFAULT_TYPER_MODEL, host=host)
 
 
@@ -384,6 +397,12 @@ def ingest_units(
     try:
         todo = [u for u in units if not manifest["namespaces"].get(u.namespace, {}).get("done")]
         for u in todo[: limit if limit is not None else len(todo)]:
+            db_path = cache_dir / f"{_SAFE_NS.sub('_', u.namespace) or 'default'}.db"
+            # Crash-resume idempotency: a namespace not marked done may have a
+            # partial DB from an aborted run — re-ingesting into it would
+            # duplicate facts. Start it from a clean slate.
+            for stale in (db_path, Path(str(db_path) + "-wal"), Path(str(db_path) + "-shm")):
+                stale.unlink(missing_ok=True)
             base = dict(mem.router.cumulative_stats)
             add_ms: list[float] = []
             facts = 0

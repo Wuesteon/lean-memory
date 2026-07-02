@@ -124,3 +124,52 @@ def test_remote_typer_env_wiring(monkeypatch):
     client = remote._get_client()  # constructs, does not connect
     assert client._client.headers["authorization"] == "Bearer hf_test"
     assert remote.model == "qwen2.5:3b"
+
+
+def test_resume_reingest_does_not_duplicate(tmp_path):
+    """Crash-resume idempotency: a namespace not marked done must restart from a
+    clean DB, not append duplicate episodes/facts into the partial one."""
+    import json
+    import sqlite3
+
+    from phase2_ingest import build_memory, ingest_units, load_longmemeval
+
+    units = load_longmemeval(FIXTURES / "lme_s_mini.json", slice="ku")
+    cache = tmp_path / "cache"
+    ingest_units(units, cache, real=False)
+    manifest_path = cache / "manifest.json"
+    m = json.loads(manifest_path.read_text())
+    del m["namespaces"]["ku_001"]  # simulate a crash mid-namespace
+    manifest_path.write_text(json.dumps(m))
+
+    ingest_units(units, cache, real=False)  # resume
+    with sqlite3.connect(f"file:{cache / 'ku_001.db'}?mode=ro", uri=True) as db:
+        episodes = db.execute("SELECT COUNT(*) FROM episode").fetchone()[0]
+    assert episodes == len(units[0].turns)  # not doubled
+
+
+def test_remote_typer_repulls_on_model_not_found(monkeypatch):
+    """The remote host may restart and lose its ephemeral model: the typer must
+    re-pull once and retry, not kill the whole shard."""
+    from lean_memory.extract.llm_typer import OllamaTyper, TyperError
+
+    monkeypatch.setenv("PHASE2_OLLAMA_HOST", "https://example.hf.space")
+    from phase2_ingest import build_typer
+
+    remote = build_typer()
+    calls = {"type": 0, "pull": 0}
+
+    def fake_parent(self, *a, **k):
+        calls["type"] += 1
+        if calls["type"] == 1:
+            raise TyperError("Ollama typing call failed: model 'qwen2.5:3b' not found (status code: 404)")
+        return ["ok"]
+
+    class FakeClient:
+        def pull(self, model):
+            calls["pull"] += 1
+
+    monkeypatch.setattr(OllamaTyper, "type_candidates", fake_parent)
+    remote._client = FakeClient()
+    assert remote.type_candidates("ep", [], known_entities=[]) == ["ok"]
+    assert calls == {"type": 2, "pull": 1}
