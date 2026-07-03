@@ -1,5 +1,40 @@
 # Phase 2 Handoff — state, remaining work, and knowledge (2026-07-03)
 
+> **STATUS CHANGE (2026-07-03 ~13:00): benchmark runs SUSPENDED by user decision.**
+> Sustained ingest rate stabilized at ~10 turns/min (ETA ~60 h) because the
+> engine's escalation calibration routes ~97% of conversational candidates to
+> LLM typing — the benchmark surfaced the flaw; running it to completion before
+> fixing the engine buys an expensive number for an engine we already know we
+> will change. Workers stopped, HF Space PAUSED (billing off), partial KU corpus
+> kept under `bench/.phase2_cache/lme_ku_shards/` (3 complete namespaces).
+> **Next phase: fix the exposed engine flaws first (backlog below), re-freeze,
+> then re-run the slices** — the harness (Tasks 1–12) is done and stands ready.
+
+## Engine-fix backlog (from benchmark findings, in priority order)
+
+1. **Escalation calibration** — both confidence gates (generator
+   `typing_threshold`, router `conf_threshold`, both 0.5) escalate ~97% of
+   conversational candidates. Fix: probe escalation vs thresholds on real LME
+   turns (offline StubTyper probe, fast), pick an operating point near the
+   design target (<20%), validate with `bet2_ablation --sweep --real` and the
+   three gates, re-freeze. This alone makes ingest ~5–8× cheaper.
+2. **Extraction shape** — fact_text is often a whole utterance (~8 facts/turn);
+   related to GLiNER over-generation at low threshold. Decide the intended
+   granularity and calibrate `threshold` alongside (1).
+3. **Recency decay anchored to wall-clock** — `exp(-λ·(now−valid_at))` ≈ 0 for
+   all facts on historical corpora; the 0.2 recency weight is dead. Options:
+   forward `now` through `Memory.search` (public param), or anchor decay to the
+   namespace's max(valid_at). Design decision needed.
+4. **`touch()` mutates reads / non-idempotent search** — known; harness works
+   around it (copy-per-arm). Consider making access-tracking opt-in.
+5. **Typing-call cost** — even at sane escalation rates, ~7 s per constrained
+   decode on a 3B model is the floor; consider smaller candidate batches,
+   explicit `num_ctx`, or a faster constrained-decode path (engine work).
+6. Review-deferred minors listed in `.superpowers/sdd/progress.md` (per task).
+
+Items 1–2 are one calibration effort. The Phase 2 re-run afterward reuses the
+harness unchanged (new config hash = new freeze; that is the designed flow).
+
 Session handoff for the Phase 2 benchmark effort. Spec:
 `docs/superpowers/specs/2026-07-02-phase2-eval-harness-design.md`. Plan (15 tasks):
 `docs/superpowers/plans/2026-07-02-phase2-eval-harness.md`. Incident-level detail:
