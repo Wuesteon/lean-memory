@@ -2,6 +2,16 @@
 
 Embedded, local-first agent memory. No server, no daemon, no mandatory cloud key.
 
+> **TODO — Phase 2 benchmarking is suspended mid-flight (2026-07-03).**
+> The LongMemEval/LoCoMo harness (`bench/phase2_*.py`) is complete and tested,
+> but the runs were deliberately stopped: they exposed engine flaws (97%
+> LLM-escalation rate on conversational data, among others) that must be fixed
+> before any score is worth publishing. To finish this right: start at
+> **`CLAUDE.md`** → `docs/phase2-learnings.md` → `docs/superpowers/phase2-HANDOFF.md`
+> (fix backlog + exact re-run commands). Also pending: final whole-branch code
+> review of the merged Phase 2 work, and rotating the API keys noted in the
+> handoff. Remove this note when the result files land in `bench/results/phase2/`.
+
 ```python
 from lean_memory import Memory
 
