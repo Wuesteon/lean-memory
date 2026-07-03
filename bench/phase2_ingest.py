@@ -289,18 +289,34 @@ def build_typer():
                 self._client = ollama.Client(host=self.host, headers=_typer_headers())
             return self._client
 
+        _TRANSIENT = ("status code: 500", "status code: 502", "status code: 503",
+                      "status code: 504", "cannot reach Ollama")
+
         def type_candidates(self, *args, **kwargs):
+            import time as _time
+
             from lean_memory.extract.llm_typer import TyperError
 
-            try:
-                return super().type_candidates(*args, **kwargs)
-            except TyperError as exc:
-                if "not found" not in str(exc):
+            last: Exception | None = None
+            for attempt in range(4):
+                try:
+                    return super().type_candidates(*args, **kwargs)
+                except TyperError as exc:
+                    msg = str(exc)
+                    if "not found" in msg:
+                        # The remote host restarted and lost its ephemeral
+                        # model — re-pull (blob is digest-pinned) and retry.
+                        self._get_client().pull(self.model)
+                        last = exc
+                        continue
+                    if attempt < 3 and any(t in msg for t in self._TRANSIENT):
+                        # Flaky proxy / brief outage: back off and retry, the
+                        # typing call is deterministic (temperature 0).
+                        last = exc
+                        _time.sleep(5 * (3**attempt))
+                        continue
                     raise
-                # The remote host restarted and lost its ephemeral model —
-                # re-pull once (blob is digest-pinned) and retry.
-                self._get_client().pull(self.model)
-                return super().type_candidates(*args, **kwargs)
+            raise last  # type: ignore[misc]
 
     return RemoteOllamaTyper(DEFAULT_TYPER_MODEL, host=host)
 

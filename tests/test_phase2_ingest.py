@@ -173,3 +173,33 @@ def test_remote_typer_repulls_on_model_not_found(monkeypatch):
     remote._client = FakeClient()
     assert remote.type_candidates("ep", [], known_entities=[]) == ["ok"]
     assert calls == {"type": 2, "pull": 1}
+
+
+def test_remote_typer_retries_transient_5xx(monkeypatch):
+    """A flaky proxy 500 must not kill a shard: retry with backoff, then raise."""
+    from lean_memory.extract.llm_typer import OllamaTyper, TyperError
+
+    monkeypatch.setenv("PHASE2_OLLAMA_HOST", "https://example.hf.space")
+    from phase2_ingest import build_typer
+
+    remote = build_typer()
+    calls = {"type": 0, "sleep": []}
+    monkeypatch.setattr("time.sleep", lambda s: calls["sleep"].append(s))
+
+    def fake_parent(self, *a, **k):
+        calls["type"] += 1
+        if calls["type"] < 3:
+            raise TyperError("Ollama typing call failed: <html>500</html> (status code: 500)")
+        return ["ok"]
+
+    monkeypatch.setattr(OllamaTyper, "type_candidates", fake_parent)
+    assert remote.type_candidates("ep", [], known_entities=[]) == ["ok"]
+    assert calls["type"] == 3 and len(calls["sleep"]) == 2
+
+    calls["type"] = 100  # now: permanent failure path — must raise after retries
+    def always_fail(self, *a, **k):
+        raise TyperError("Ollama typing call failed: boom (status code: 502)")
+    monkeypatch.setattr(OllamaTyper, "type_candidates", always_fail)
+    import pytest
+    with pytest.raises(TyperError):
+        remote.type_candidates("ep", [], known_entities=[])
