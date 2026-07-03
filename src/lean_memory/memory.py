@@ -29,6 +29,12 @@ from .types import Entity, Episode, Fact, RetrievedFact, new_id, now_ms
 # domain predicate the rules/stub passes use when none is guessed
 _DEFAULT_PREDICATE = "about"
 
+# Cap on the known-entity names handed to the router/typer per add(). The set
+# otherwise grows unboundedly with namespace age (conversational data creates
+# entities every turn), inflating — and eventually silently truncating — the
+# constrained-typing prompt. Most recent names win.
+_KNOWN_ENTITIES_CAP = 100
+
 _SAFE_NS = re.compile(r"[^A-Za-z0-9_.-]")
 
 
@@ -155,9 +161,11 @@ class Memory:
 
     def _known_entity_names(self, store: SqliteStore, namespace: str) -> set[str]:
         """Names of entities already seen in this namespace — the router uses these to
-        escalate cross-turn references (the spec's hardest escalation signal)."""
+        escalate cross-turn references (the spec's hardest escalation signal).
+        Capped to the most recent _KNOWN_ENTITIES_CAP names (ids are time-sortable)."""
         rows = store._db.execute(
-            "SELECT name FROM entity WHERE namespace=?", (namespace,)
+            "SELECT name FROM entity WHERE namespace=? ORDER BY created_at DESC, id DESC LIMIT ?",
+            (namespace, _KNOWN_ENTITIES_CAP),
         ).fetchall()
         return {r["name"] for r in rows}
 
