@@ -178,11 +178,15 @@ class Memory:
         *,
         as_of: Optional[int] = None,
         is_latest_only: bool = True,
+        now: Optional[int] = None,
     ) -> list[RetrievedFact]:
+        """`now` (epoch ms) anchors the recency-decay term — pass the corpus's
+        present when querying historical data, else the wall clock is used and
+        recency is ≈0 for everything old (the term de-ranks nothing)."""
         store = self._store(namespace)
         retriever = Retriever(store, self.embedder, self.reranker)
         return retriever.retrieve(
-            query, k, as_of=as_of, is_latest_only=is_latest_only
+            query, k, as_of=as_of, is_latest_only=is_latest_only, now=now
         )
 
     def close(self) -> None:
