@@ -47,13 +47,14 @@ from lean_memory import Memory
 mem = Memory(root="./data")   # one SQLite file per namespace, stored under ./data/
 
 # Store facts in natural language
-mem.add("alice", "I'm a backend engineer at Stripe.")
-mem.add("alice", "I switched to frontend at Vercel last month.")
+mem.add("alice", "I work at Stripe.")
+mem.add("alice", "I now work at Vercel.")   # supersedes Stripe automatically
 
-# Retrieve — superseded Stripe fact is automatically de-ranked
+# Retrieve — the superseded Stripe fact drops out; only the current one is returned
 results = mem.search("alice", "what does Alice do for work?", k=3)
 for hit in results:
     print(hit.fact.fact_text, hit.final_score)
+# → I now work at Vercel. 0.89
 
 # Point-in-time query — what was true at a specific moment?
 mem.search("alice", "employer", as_of=<timestamp_ms>, is_latest_only=False)
