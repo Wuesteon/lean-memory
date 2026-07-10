@@ -15,8 +15,10 @@
 
 ### Confidence-independent reasons (constant across the whole sweep)
 
-Four reason counts do not move as `conf_threshold` varies — they are properties
-of the candidate, not of the threshold, so no threshold pair can retire them:
+Three reason counts do not move anywhere in the sweep — they are properties of
+the candidate, not of either threshold, so no threshold pair can retire them
+(`pre_flagged` is invariant to `conf_threshold` but tracks `typing_threshold`,
+so it is excluded here):
 
 - `coreference`: 664/1012 = 65.6% — the dominant confidence-independent floor.
   The current router escalates on ANY pronoun/demonstrative anywhere in the
