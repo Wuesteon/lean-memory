@@ -1,0 +1,95 @@
+{
+  "slice": "ku",
+  "namespaces": 5,
+  "turns": 120,
+  "results": [
+    {
+      "typing_threshold": 0.5,
+      "conf_threshold": 0.5,
+      "gliner_threshold": 0.1,
+      "seen": 1012,
+      "escalated": 959,
+      "rate": 0.9476284584980237,
+      "by_reason": {
+        "pre_flagged": 817,
+        "low_confidence": 817,
+        "derives": 110,
+        "prior_entity": 555,
+        "coreference": 1
+      },
+      "turns": 120,
+      "facts_per_turn": 8.433333333333334,
+      "median_fact_len": 184
+    },
+    {
+      "typing_threshold": 0.5,
+      "conf_threshold": 0.5,
+      "gliner_threshold": 0.2,
+      "seen": 766,
+      "escalated": 699,
+      "rate": 0.912532637075718,
+      "by_reason": {
+        "pre_flagged": 534,
+        "low_confidence": 534,
+        "derives": 92,
+        "prior_entity": 413,
+        "coreference": 1
+      },
+      "turns": 120,
+      "facts_per_turn": 6.383333333333334,
+      "median_fact_len": 187
+    },
+    {
+      "typing_threshold": 0.5,
+      "conf_threshold": 0.5,
+      "gliner_threshold": 0.3,
+      "seen": 580,
+      "escalated": 501,
+      "rate": 0.8637931034482759,
+      "by_reason": {
+        "pre_flagged": 320,
+        "low_confidence": 320,
+        "derives": 73,
+        "prior_entity": 304,
+        "coreference": 1
+      },
+      "turns": 120,
+      "facts_per_turn": 4.833333333333333,
+      "median_fact_len": 176
+    },
+    {
+      "typing_threshold": 0.5,
+      "conf_threshold": 0.5,
+      "gliner_threshold": 0.4,
+      "seen": 441,
+      "escalated": 349,
+      "rate": 0.7913832199546486,
+      "by_reason": {
+        "pre_flagged": 151,
+        "low_confidence": 151,
+        "derives": 63,
+        "prior_entity": 249,
+        "coreference": 1
+      },
+      "turns": 120,
+      "facts_per_turn": 3.675,
+      "median_fact_len": 173
+    },
+    {
+      "typing_threshold": 0.5,
+      "conf_threshold": 0.5,
+      "gliner_threshold": 0.5,
+      "seen": 316,
+      "escalated": 200,
+      "rate": 0.6329113924050633,
+      "by_reason": {
+        "derives": 42,
+        "prior_entity": 181,
+        "coreference": 1
+      },
+      "turns": 120,
+      "facts_per_turn": 2.6333333333333333,
+      "median_fact_len": 171
+    }
+  ]
+}

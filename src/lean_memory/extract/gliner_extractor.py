@@ -69,8 +69,12 @@ DEFAULT_RELATION_TYPES: tuple[str, ...] = (
 )
 
 # LOW threshold => high recall (over-generate). The real gliner2 default is 0.5; the spec
-# wants us well below that so candidates that the LLM can later validate are not pre-filtered.
-DEFAULT_THRESHOLD = 0.1
+# wants us below that so candidates the LLM can later validate are not pre-filtered — but 0.1
+# over-generated (~8.4 facts/turn on real conversational data). Calibrated to 0.4 via the
+# 2026-07 granularity sweep (bench/results/calibration/2026-07-granularity-sweep.json):
+# smallest swept threshold with facts/turn <= 4 (3.67 facts/turn, median fact_text 173 chars).
+# Median length is threshold-insensitive (171-187 across the whole sweep) so it does not gate.
+DEFAULT_THRESHOLD = 0.4
 # A candidate at or below this model confidence is *pre-flagged* for LLM typing (needs_typing).
 # The router (Pass 3) ORs this with its other triggers (coref/ellipsis/cross-turn/derives);
 # we only set the cheap, locally-knowable signal here.

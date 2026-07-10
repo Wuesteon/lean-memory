@@ -1,5 +1,47 @@
 # Calibration runs — escalation & granularity (launch gate)
 
+## Task 5 decision — GLiNER candidate threshold (granularity)
+
+- Probe: `phase2_escalation_probe.py --slice ku --namespaces 5 --turns-per-ns 40
+  --typing 0.5 --conf 0.5 --gliner-threshold 0.1 0.2 0.3 0.4 0.5` (turns=120).
+- File: `2026-07-granularity-sweep.json`.
+
+| gliner_threshold | facts/turn | median_fact_len | escalation rate |
+|-----------------:|-----------:|----------------:|----------------:|
+| 0.10             |       8.43 |             184 |           94.8% |
+| 0.20             |       6.38 |             187 |           91.3% |
+| 0.30             |       4.83 |             176 |           86.4% |
+| **0.40**         |   **3.67** |         **173** |       **79.1%** |
+| 0.50             |       2.63 |             171 |           63.3% |
+
+- **Chosen: `DEFAULT_THRESHOLD = 0.4`.** Decision rule = smallest swept threshold
+  meeting the granularity targets, recall-biased (keep as many candidates as the
+  targets allow). facts/turn falls monotonically as threshold rises; 0.30 → 4.83
+  (fails ≤ 4), 0.40 → 3.67 (passes), so 0.40 is the smallest qualifying point.
+- **`median_fact_len ≤ 160` target waived** (controller adjudication, user-approved):
+  the median is threshold-insensitive — it sits at 171–187 chars across the *entire*
+  sweep, moving non-monotonically and never near 160. It measures how long a
+  standalone `fact_text` sentence is, not how many candidates the extractor emits,
+  so no GLiNER threshold can move it. The decision therefore reduces to the single
+  granularity signal that *does* respond to the threshold: facts/turn ≤ 4.
+
+### Load-bearing observations for Task 6 (escalation operating point)
+
+Task 6 calibrates the escalation operating point against the candidate population
+this threshold produces (at 0.40: seen=441, escalated=349, rate=79.1%). Two
+router `by_reason` facts from this sweep constrain that work:
+
+- **`coreference` collapsed 664 → 1** on real turns — the Task 4 endpoint-scoped
+  coref/ellipsis fix is verified against real conversational data here (the 2026-07
+  baseline below measured 664/1012 = 65.6% coref before the fix; post-fix it fires
+  on exactly one candidate at every threshold in this sweep). The dominant
+  confidence-independent escalation floor is retired.
+- **`prior_entity` is now the dominant escalation reason**: 181/316 = 57% of
+  candidates at threshold 0.50, and it is confidence-independent (it does not move
+  with `typing`/`conf`). With coref gone, `prior_entity` alone keeps escalation well
+  above the <20% design gate, so Task 6's operating-point work must scope or account
+  for `prior_entity` — thresholds cannot retire it.
+
 ## post-Task-4 goldset check (endpoint-scoped coref/ellipsis)
 
 - Command: `bench/bet2_ablation.py` (offline arm — no Ollama; refuses a BET-2

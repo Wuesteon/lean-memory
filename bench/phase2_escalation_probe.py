@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import sys
 import time
 from collections import Counter, deque
@@ -84,15 +85,19 @@ def run_probe(namespaces: list[list[str]], *, typing_threshold: float, conf_thre
 
     seen = 0
     escalated = 0
+    turns = 0                     # NEW: total turns processed (denominator for facts/turn)
+    fact_lengths: list[int] = []  # NEW: len(fact_text) per candidate, for the median
     by_reason: Counter = Counter()
 
-    for turns in namespaces:
+    for turns_list in namespaces:
         known: deque[str] = deque(maxlen=_KNOWN_ENTITIES_CAP)
-        for turn_text in turns:
+        for turn_text in turns_list:
+            turns += 1            # NEW
             episode = Episode(namespace="probe", raw=turn_text, t_ref=0, source="user")
             candidates = generator.generate(episode)
             if not candidates:
                 continue
+            fact_lengths.extend(len(c.fact_text or "") for c in candidates)  # NEW
             router.route(candidates, known_entities=set(known))
             stats = router.last_stats
             seen += stats["seen"]
@@ -105,10 +110,14 @@ def run_probe(namespaces: list[list[str]], *, typing_threshold: float, conf_thre
     return {
         "typing_threshold": typing_threshold,
         "conf_threshold": conf_threshold,
+        "gliner_threshold": generator.threshold,          # NEW
         "seen": seen,
         "escalated": escalated,
         "rate": (escalated / seen) if seen else 0.0,
         "by_reason": dict(by_reason),
+        "turns": turns,                                    # NEW
+        "facts_per_turn": (seen / turns) if turns else 0.0,  # NEW
+        "median_fact_len": int(statistics.median(fact_lengths)) if fact_lengths else 0,  # NEW
     }
 
 
@@ -131,6 +140,8 @@ def main() -> int:
     ap.add_argument("--turns-per-ns", type=int, default=0, help="cap turns per namespace (0 = no cap)")
     ap.add_argument("--conf", type=float, default=None, help="run a single conf_threshold point (else full sweep)")
     ap.add_argument("--typing", type=float, default=None, help="single typing_threshold (else full sweep)")
+    ap.add_argument("--gliner-threshold", type=float, nargs="+", default=None,
+                    help="also sweep the GLiNER candidate threshold (default: model default only)")
     ap.add_argument("--json", type=Path, default=None, help="write sweep results to this JSON file")
     args = ap.parse_args()
 
@@ -147,20 +158,29 @@ def main() -> int:
     conf_points = (args.conf,) if args.conf is not None else CONF_THRESHOLDS
     typing_points = (args.typing,) if args.typing is not None else TYPING_THRESHOLDS
 
+    # When the flag is absent, iterate over the single model-default threshold so
+    # behavior is unchanged; otherwise sweep each requested GLiNER threshold.
+    gliner_points = tuple(args.gliner_threshold) if args.gliner_threshold is not None else (generator.threshold,)
+
     print("=" * 88)
     print("ESCALATION SWEEP — real LongMemEval turns (offline, no LLM)")
     print("=" * 88)
-    header = f"{'typing_thr':>10} {'conf_thr':>9} {'seen':>7} {'escalated':>10} {'rate':>8}"
+    header = (f"{'gliner_thr':>10} {'typing_thr':>10} {'conf_thr':>9} {'seen':>7} "
+              f"{'escalated':>10} {'rate':>8} {'facts/turn':>11} {'med_len':>8}")
     print(header)
 
     results = []
     t0 = time.time()
-    for typing_thr in typing_points:
-        for conf_thr in conf_points:
-            r = run_probe(namespaces, typing_threshold=typing_thr, conf_threshold=conf_thr,
-                          generator=generator)
-            results.append(r)
-            print(f"{typing_thr:>10.2f} {conf_thr:>9.2f} {r['seen']:>7} {r['escalated']:>10} {r['rate']:>8.1%}")
+    for gliner_thr in gliner_points:
+        generator.threshold = gliner_thr
+        for typing_thr in typing_points:
+            for conf_thr in conf_points:
+                r = run_probe(namespaces, typing_threshold=typing_thr, conf_threshold=conf_thr,
+                              generator=generator)
+                results.append(r)
+                print(f"{gliner_thr:>10.2f} {typing_thr:>10.2f} {conf_thr:>9.2f} {r['seen']:>7} "
+                      f"{r['escalated']:>10} {r['rate']:>8.1%} {r['facts_per_turn']:>11.2f} "
+                      f"{r['median_fact_len']:>8}")
     print(f"\n({time.time() - t0:.1f}s wall)\n")
 
     best = min(results, key=lambda r: r["rate"])

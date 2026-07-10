@@ -40,6 +40,15 @@ def test_run_probe_offline_shape_and_determinism():
     assert {"typing_threshold", "conf_threshold", "seen", "escalated", "rate", "by_reason"}.issubset(r1)
 
 
+def test_run_probe_reports_shape_metrics():
+    gen = Gliner2Generator(model=FakeGliner2())
+    namespaces = [["Alice works at Acme.", "Alice works at Acme."]]
+    r = run_probe(namespaces, typing_threshold=0.5, conf_threshold=0.5, generator=gen)
+    assert r["turns"] == 2
+    assert r["facts_per_turn"] == r["seen"] / 2
+    assert r["median_fact_len"] > 0  # FakeGliner2 spans → non-empty fact_text
+
+
 import json
 
 
