@@ -1,404 +1,572 @@
-# lean-memory-server — agent-first memory service + verification UI
+# lean-memory-console — agent-first memory verification console (design v2)
 
-Date: 2026-07-10 · Status: approved design (brainstorming complete; adversarial
-self-review applied)
+Date: 2026-07-10 · Status: approved design v2 (v1 platform design rethought
+after external strategy review; v1's multi-tenant service preserved as Tier 2;
+adversarial self-review of v2 applied — see §0)
 Packet: **Memory UI** (workpackets.md status table) · Branch: `worktree-memory-ui` · Lane: **D**
+
+## 0. What changed from v1 and why
+
+v1 designed a multi-tenant platform (tenant registry, per-tenant API keys,
+admin token, control-plane DB, six-page SPA) for a team-infrastructure buyer
+the strategy explicitly defers. The actual v1 user is one human whose own
+Claude Code writes memories and who opens a UI to verify them. The external
+strategy review (2026-07-10 engagement readout) recommended exactly this
+rescope: a single-tenant read-only inspector first, the multi-tenant control
+plane only on demonstrated team demand. v2 therefore:
+
+- **Rescopes Tier 1** to a single-tenant console with two deployment modes:
+  a transient local viewer (think `jupyter notebook`, not Grafana) and a
+  single-tenant Docker container (founder decision: containerized-from-day-one
+  stays in Tier 1).
+- **Adds the observing MCP wrapper** — observability without a mandatory
+  server in the data path.
+- **Adds the Claude Code plugin** as the primary distribution artifact.
+- **Defers to Tier 2** (§14): tenant registry, per-tenant API keys, admin
+  control plane — v1 §5/§7 designs carry over intact when team demand shows.
+- **Cuts** the standalone metrics dashboard page (readout DL-4 resolution:
+  microscope, not Grafana — headline numbers fold into Overview).
+- **Absorbs the readout's spec deltas**: launch-window separation contract
+  (§3), dead-recency banner deleted (the fix lands with WP0; the packet
+  rebases onto post-WP0 main), fail-loud schema tripwire instead of a comment
+  (§13).
+
+v2 self-review corrections (adversarial review, 2026-07-10): the engine sets
+**no `busy_timeout`** (`sqlite_store.py` `_connect()` sets only
+`journal_mode=WAL` + `foreign_keys=ON`), so all cross-process write-safety is
+console-owned (§6); the earlier "`mode=ro` fails with error 14 on
+sidecar-less files" claim **failed empirical reproduction** and the open
+strategy is now error-driven, not heuristic (§7); the "read-only console"
+claim is qualified (§1); a dozen implementability gaps pinned throughout.
 
 ## 1. Goal
 
-A self-hostable Docker service that turns lean-memory into an agent-facing
-memory backend with a human verification console:
+**Agents write and search; the human verifies.** The agent (Claude Code via
+MCP, or any HTTP client in Docker mode) is the only writer of memory content.
+The human opens the console **read-only over stored memory content** — no
+adding, editing, or deleting facts. The single exception is the manual
+test-search box (§7), which runs a real engine search and therefore bumps
+access stats (`touch()`); that is observability of live-search behavior, not
+memory mutation. The console makes the engine's invisible signals — the
+ADD-only supersession spine, per-hit score decomposition, provenance
+episodes — visible for the first time.
 
-- **Agents write and search.** Claude Code (or any MCP/HTTP client) connects
-  over the network with a per-tenant API key. The agent is the only writer.
-- **Humans observe and verify.** The web UI is read-only against memory data:
-  metrics, live activity, fact browsing, supersession timelines, provenance
-  episodes, and search traces with full score breakdowns. The only mutating
-  actions in the UI are tenant/API-key management.
+**Namespaces replace tenants.** The engine's one-SQLite-file-per-namespace
+model already provides the isolation story: one namespace per project/agent.
+Tier 1 has no tenant machinery at all.
 
-One tenant = one engine SQLite file (the engine's existing
-one-file-per-namespace model), so tenant isolation is physical, not row-level.
+## 2. Non-goals (Tier 1)
 
-## 2. Non-goals (v1)
-
-- No user accounts / RBAC / audit log / webhooks / usage metering (bolt on later).
+- No multi-tenancy: no tenant registry, no per-tenant API keys, no admin
+  control plane (all Tier 2, §14).
 - No memory editing or deleting from the UI (ADD-only discipline; deletion is
-  WP5's design problem, not this packet's).
-- No changes to the core library, its MCP stdio server, its pyproject, its
-  tests, or `bench/` (lane-D conflict rule — see §3).
-- No SSE/websockets; the activity feed polls (3–5 s interval).
-- No benchmark/project-status views (that audience is this repo's developers,
-  not self-hosters).
-- No component-level frontend tests in v1 (typecheck + production build are the
-  CI gate).
+  WP5's design problem). Namespace deletion is also out — delete the file,
+  documented, until WP5.
+- No changes to the core library, its MCP stdio server, its tests, its
+  pyproject, or `bench/` (lane-D rule, §3).
+- No user accounts / RBAC / webhooks / usage metering.
+- No SSE/websockets; the activity view polls (3–5 s).
+- No standalone metrics/latency dashboard page (see §0).
+- No component-level frontend tests (typecheck + production build gate).
 
 ## 3. Constraints and strategy context
 
-- **Lane D file discipline.** This packet must not touch lane A
-  (`src/lean_memory/`), lane B (`bench/`), or lane C files. Everything ships in
-  new top-level directories. Consequence: the server does **not** add
-  enumeration methods to the store; it runs its own read-only SQL, and
-  migrates to WP4's `get/get_all/history/explain` API when that packet lands
-  (see §12).
-- **Anti-goals reconciliation.** `workpackets.md` lists "dashboards, hosted
-  anything" as anti-goals *for the core library's embedded positioning*. This
-  deliverable is a separate, optional deployable: the core library gains no
-  mandatory server/daemon, no new dependencies, no changed defaults. That
-  satisfies WP8's rule ("none may add a mandatory server/daemon to the core
-  library"). Recorded here as a conscious, user-directed strategy addition.
-- **Relationship to WP8b/WP8c.** The REST data plane here effectively delivers
-  WP8b (thin FastAPI wrapper) early, in lane D. Its surface (including the §7
-  pagination envelope) is shaped so WP8c (TypeScript client) can target it
-  unchanged. At merge time, update the WP8b row in `workpackets.md` to point
-  here.
-- **Global invariants inherited:** offline test suite green at every commit;
-  ADD-only discipline; offline-by-default (server runs fully with stub
-  backends); Apache-2.0.
+- **Lane D file discipline.** No changes under `src/lean_memory/`, `bench/`,
+  or lane-C files. The console runs its own read-only SQL for enumeration
+  (test-search uses the engine, not raw SQL) until WP4's
+  `get/get_all/history/explain` API lands (§13).
+- **Launch-window separation contract** (from the engagement readout,
+  CEO/CTO-committed): no Docker/server artifact lands on the core repo's
+  default branch or is linked from it until the six-week post-launch read
+  opens. This packet develops in the `worktree-memory-ui` worktree; at
+  publication time the console moves to a separate public repo
+  (`lean-memory-console`) which doubles as its plugin marketplace (§9).
+  Founder decision D1 (separate repo vs. branch) remains open; the spec is
+  laid out so either works.
+- **Rebase gate:** no `console/` code is authored until this packet rebases
+  onto post-WP0 main (frozen escalation constants, recency fix). Consequence:
+  the v1 "dead recency" honesty banner is deleted from this design — on the
+  merge target the recency term works; a false honesty banner is the opposite
+  of trust positioning.
+- **Anti-goals reconciliation:** the core library gains no mandatory
+  server/daemon, no new dependency, no changed default (WP8 rule satisfied).
+  The local console mode is a transient localhost process, not a daemon.
+- **Relationship to WP8a/WP8b/WP8c:** the plugin (§9) is the future home of
+  WP8a auto-capture hooks; Docker mode's REST surface previews WP8b and its
+  pagination envelope (§7) is the contract WP8c's TS client targets.
+- **Global invariants inherited:** offline suite green at every commit;
+  ADD-only; offline-by-default (console runs fully on stub backends);
+  Apache-2.0.
 
-## 4. Repo layout (all new, no existing files modified)
+## 4. Architecture — one app, two modes
 
 ```
-server/                       # deployable FastAPI app (own project)
-  pyproject.toml              # depends on lean-memory (path/PyPI), fastapi,
-                              # uvicorn, mcp; extras: [models] passthrough
-  src/lean_memory_server/
-    app.py                    # FastAPI factory, static mount, lifespan
-    config.py                 # env parsing (LM_DATA_ROOT, ADMIN_TOKEN, PORT,
-                              # LM_SERVER_MODELS)
-    control.py                # control-plane DB (tenants, keys, events)
-    engine.py                 # Memory instance pool (one per tenant),
-                              # per-tenant asyncio write locks
-    events.py                 # event recording + supersession detection
-    inspect_sql.py            # read-only enumeration SQL over tenant DBs
-    routes/
-      mcp.py                  # streamable-HTTP MCP endpoint (+ key auth)
-      data.py                 # /v1 REST mirror (add/search)
-      admin.py                # tenants, keys, whoami
-      views.py                # read-only inspection API for the UI
-    static/                   # built SPA output (gitignored; populated by the
-                              # ui build in Docker/CI, or `bun run build` locally)
-  tests/                      # offline pytest suite (own conftest)
-    fixtures/build_fixture.py # deterministic fixture-DB builder (see §11)
-  README.md                   # quickstart, Claude Code connect snippet
-ui/                           # React SPA source
-  package.json                # built with Bun; Vite, React 18, TS,
-                              # react-router, Tailwind CSS v4, Recharts
-  src/...
+LOCAL MODE (default; zero Docker, nothing runs when the agent doesn't)
+  Claude Code ──stdio──► lean-memory-console mcp   (observing MCP wrapper)
+                             │  imports Memory; writes <root>/<ns>.db
+                             │  + appends search traces to _events.db sidecar
+  Human ──browser──► lean-memory-console serve     (transient, 127.0.0.1,
+                             read-only over the same data root)
+
+DOCKER MODE (single-tenant, long-running, container owns /data)
+  Agents ──HTTP(MCP)/REST──► container: same FastAPI app
+                             (data plane + console UI + event recording)
+  Human ──browser──► same container, same LM_API_KEY
+```
+
+Components (satellite project; nothing in the core package):
+
+```
+console/                       # Python package `lean_memory_console`
+  pyproject.toml               # deps: lean-memory (path/PyPI), fastapi,
+                               # uvicorn, mcp; extras: [models] passthrough
+  src/lean_memory_console/
+    cli.py                     # `lean-memory-console serve|mcp` entry point
+                               # + `--print-compose-path` (§9/§10)
+    config.py                  # env/flag parsing, data-root resolution (§10),
+                               # _SAFE_NS mirror + reserved-ns guard (§5)
+    app.py                     # FastAPI factory (both modes), static mount
+    engine.py                  # Memory instance pool per namespace,
+                               # per-namespace asyncio write locks (intra-
+                               # process), SQLITE_BUSY retry wrapper (§6)
+    events.py                  # _events.db sidecar: schema, recording,
+                               # supersession detection, atomic retention
+    observe_mcp.py             # stdio MCP server (observing wrapper)
+    inspect_sql.py             # read-only enumeration SQL over engine DBs
+    routes/ (mcp.py, data.py, views.py)
+    static/                    # built SPA (gitignored; built by ui/)
+  tests/                       # offline pytest suite
+    fixtures/build_fixture.py  # deterministic fixture builder (§12)
+  README.md                    # quickstart, connect snippets
+ui/                            # React 18 + TS SPA; Bun + Vite,
+                               # react-router, Tailwind CSS v4, Recharts
+plugin/                        # Claude Code plugin (§9); on extraction the
+  .claude-plugin/plugin.json   # repo gains .claude-plugin/marketplace.json
+  .mcp.json                    # (marketplace root = dir containing
+  commands/  skills/           #  .claude-plugin/; source: "./plugin")
 deploy/
-  Dockerfile                  # multi-stage; named targets `slim` and `full` (§9)
-  docker-compose.yml          # service + /data volume; build.target: full
+  Dockerfile                   # multi-stage; named targets `slim`/`full` (§10)
+  docker-compose.yml           # single service, /data volume, target: full
+                               # (single source of truth — §9)
 ```
 
-## 5. Control plane storage
+## 5. Storage: engine DBs + events sidecar
 
-`_server.db` (SQLite, WAL) lives beside the tenant DBs in `LM_DATA_ROOT`
-(default `/data` in Docker).
+The console adds exactly one file to the data root: **`_events.db`** (SQLite,
+WAL, opened with `PRAGMA busy_timeout=5000` — console-owned connections set
+this explicitly because the engine does not, §6). Everything else is the
+engine's own `<safe_namespace>.db` files.
 
-**Reserved-namespace guard (server-owned).** The engine's sanitizer does NOT
-prevent collisions here: it is the private regex `_SAFE_NS =
-re.compile(r"[^A-Za-z0-9_.-]")` plus an `… or "default"` empty-name fallback
-(`memory.py:38,70-71`), and it *preserves* leading underscores — a tenant named
-`_server` would map to `_server.db`. Therefore tenant creation (§7) must
-reject any name whose sanitized namespace is empty or begins with `_`. The
-server mirrors the regex + fallback in one place (`control.py`) with a header
-comment naming `memory.py` as the source; this private-symbol coupling is
-owned by the server and re-verified on every engine version bump.
+**Reserved-namespace guard (console-owned).** The engine's sanitizer is the
+private regex `_SAFE_NS = re.compile(r"[^A-Za-z0-9_.-]")` plus an
+`… or "default"` fallback (`memory.py:38,70-71`); it *preserves* leading
+underscores, so nothing in the engine stops a namespace named `_events`
+colliding with the sidecar. Therefore: (a) namespace discovery globs `*.db`
+and **skips `_*.db`**; (b) the observing MCP and Docker data plane **reject**
+any namespace whose sanitized form is empty or begins with `_`. The console
+mirrors the regex + fallback in one place (`config.py`), guarded by the
+fail-loud tripwire (§13).
 
 ```sql
-tenant(id INTEGER PK, name TEXT UNIQUE, namespace TEXT UNIQUE,  -- sanitized
-       created_at INTEGER,                                       -- epoch-ms
-       deleted_at INTEGER NULL)                                  -- soft-mark, §7
-api_key(id INTEGER PK, tenant_id INTEGER REFERENCES tenant ON DELETE CASCADE,
-        key_hash TEXT,          -- sha256 hex of full key
-        prefix TEXT,            -- first 12 chars, for display ("lm_live_ab12…")
-        created_at INTEGER, revoked_at INTEGER NULL)
-event(id INTEGER PK, tenant_id INTEGER REFERENCES tenant ON DELETE CASCADE,
-      ts INTEGER, kind TEXT CHECK(kind IN ('add','search')),
-      duration_ms REAL, payload TEXT)                            -- JSON
+-- _events.db
+event(id INTEGER PK, namespace TEXT, ts INTEGER,
+      kind TEXT CHECK(kind IN ('add','search')),
+      duration_ms REAL, payload TEXT);          -- JSON
+CREATE INDEX ix_event_ns_ts ON event(namespace, ts);
 ```
 
-- API keys: `lm_live_` + 32 hex chars, shown **once** at creation, stored as
-  sha256. Lookup: hash the presented key, match `key_hash`, reject if revoked.
-- **Failed calls** keep their `add`/`search` kind — there is no `failed` kind.
-  A failure is marked solely by `payload.error` (string); the Activity feed
-  renders an error badge from it. The `?kind` filter (§7) accepts exactly
-  `add|search`.
-- **Control-plane concurrency:** all control-plane mutations for a tenant
-  (create/delete/key ops) are serialized under that tenant's lock (§10). On
-  tenant delete, the tenant row and its `api_key`/`event` rows are removed in
-  one `_server.db` transaction *before* the data files are unlinked.
-
-Event payloads:
+Event payloads (identical in both modes — recorded by `observe_mcp.py`
+locally and by the FastAPI handlers in Docker):
 
 - `add`: `{episode_text_chars, source, t_ref, fact_ids, fact_count,
   superseded_fact_ids, superseded_count}`.
   **Supersession detection (pinned):** immediately after `Memory.add()`
-  returns — while still holding the per-tenant write lock, so no concurrent
-  add can interleave — run
-  `SELECT id FROM fact WHERE superseded_by IN (<returned fact ids>)`
-  on the tenant DB. `superseded_fact_ids` = that result;
-  `superseded_count = len(result)`. (`superseded_by` points from the retired
-  fact to the new one, per `store.supersede_fact`.) Stopgap until WP4 exposes
-  supersession in the return value.
+  returns — while still holding that namespace's intra-process write lock —
+  run `SELECT id FROM fact WHERE superseded_by IN (<returned fact ids>)` on
+  the namespace DB (`superseded_by` points from the retired fact to the new
+  one, so the IN-clause on *my* returned ids is inherently scoped to *my*
+  add's supersessions even if another process writes concurrently).
+  Cross-process caveat: the engine's `add` commits `add_fact` and
+  `supersede_fact` separately (two commits, not one transaction), so a
+  concurrent writer in another process can force `SQLITE_BUSY` mid-add — the
+  §6 retry contract covers it. Stopgap until WP4 exposes supersession in the
+  return value.
 - `search`: `{query, k, latest_only, origin, hits: [{fact_id, fact_text,
   final_score, relevance, recency, importance, dense_rank, sparse_rank,
-  rrf_score}]}` — hit fields copied verbatim from `RetrievedFact`.
-  `origin` is `"agent"` (data plane) or `"ui"` (test-search, §7).
+  rrf_score}]}`. Field sourcing: `fact_id`/`fact_text` come from the nested
+  `RetrievedFact.fact` (`.fact.id`, `.fact.fact_text`); the seven score
+  fields are copied directly from the `RetrievedFact` top level. `origin` ∈
+  `agent|ui` (`ui` = the console's test-search, §7).
 
-**Naming note:** the wire parameter is `latest_only` everywhere (REST body,
-views query param, event payload). It maps to the engine kwarg
-`is_latest_only` and filters the `fact.is_latest` column. Default: `true`.
+**Event-recording failure contract:** recording an event must never mask the
+operation's own result — if the event INSERT itself fails (e.g. lock timeout
+exhausted), it degrades to a log line, not an error response. Failed engine
+calls keep their `add`/`search` kind and are marked solely by
+`payload.error`; the UI renders an error badge from it.
 
-## 6. Data plane (agent-facing)
+**Graceful degradation:** adds are reconstructible from the engine DB alone
+(episodes + facts + `ingested_at`), so a data root written by the *core*
+stdio MCP server (no sidecar) still renders everything except search traces;
+the Traces page then shows a "connect via the observing MCP to capture
+traces" hint instead of an empty table.
 
-Auth: `Authorization: Bearer <api-key>` on every call; the key resolves the
-tenant. **Credentials are plane-scoped:** a tenant key is valid only on
-`/mcp` and `/v1`; the admin token is valid only on `/admin` and `/views`.
-Presenting the wrong credential class returns 401 (never a super-key).
+**Naming note:** the wire parameter is `latest_only` everywhere (tool arg,
+REST body, views query param, event payload). It maps to the engine kwarg
+`is_latest_only` and filters the `fact.is_latest` column. Default `true`.
 
-**MCP (primary).** `/mcp` — streamable-HTTP MCP endpoint (Python `mcp` SDK /
-FastMCP mounted into the FastAPI app), tools mirroring the stdio server's
-vocabulary (`memory_add`/`memory_search`; deliberately no `memory_clear` —
-tenant deletion in the UI is the only deletion surface) but tenant-scoped and
-JSON-returning:
+**Retention (atomic, cross-process-safe):** hard cap of 10k events per
+namespace. After each INSERT, a cheap `COUNT` guard decides whether to prune;
+pruning is one statement in the same connection —
+`DELETE FROM event WHERE namespace=? AND id NOT IN (SELECT id FROM event
+WHERE namespace=? ORDER BY ts DESC, id DESC LIMIT 10000)` — so interleaved
+writers cannot over-prune. Overview surfaces the earliest stored event `ts`
+so truncation is visible, never silent.
 
-- `memory_add(text: str, source: str = "user", t_ref: int | None = None)
-  -> {fact_ids, superseded_count}`
-- `memory_search(query: str, k: int = 5) -> {hits: [{fact_text, final_score}]}`
-  — MCP always passes `latest_only=true`; the flag is REST-only (keeps the
-  agent-facing surface minimal).
+## 6. Write path (agent-facing)
 
-`t_ref` (epoch-ms) is the world/event time that becomes `valid_at` and anchors
-the temporal spine. Live agents omit it (server fills `now`); replay/import
-agents supply it — omitting it on historical data would silently collapse the
-spine's ordering, so the README documents both modes.
+**Cross-process concurrency contract (console-owned).** Verified: the engine
+sets **no** `busy_timeout` (`sqlite_store.py` `_connect()` configures only
+WAL + foreign keys; SQLite's default timeout is 0 ms), so a second concurrent
+writer *raises* `SQLITE_BUSY` immediately instead of waiting. The console
+cannot change the engine (lane D), so it owns the handling: (a) console-owned
+connections (`_events.db`, read connections) set `PRAGMA busy_timeout=5000`
+at open; (b) every engine write call (`Memory.add`, `touch()` via search) is
+wrapped in a bounded retry-on-`SQLITE_BUSY` loop (3 attempts, short backoff);
+(c) two processes writing one namespace concurrently (e.g. two Claude Code
+sessions spawning the wrapper on the same data root) is a
+supported-but-serialized-by-retry path, not lock-free — the README recommends
+one namespace per project/session. Adding `busy_timeout` to the engine's
+`_connect()` is recorded as engine-coupling debt for lane A (§13).
 
-Claude Code connect snippet (rendered ready-to-copy on the tenant page):
+**Local mode — observing MCP (primary).** `lean-memory-console mcp` — stdio,
+spawned by Claude Code (via the plugin or `claude mcp add`). Tools:
+
+- `memory_add(namespace: str, text: str, source: str = "user",
+  t_ref: int | None = None) -> {fact_ids, superseded_count}`
+- `memory_search(namespace: str, query: str, k: int = 5)
+  -> {hits: [{fact_text, final_score}]}` — always `latest_only=true`
+  (the flag is REST-only; keeps the agent surface minimal).
+
+The wrapper is a deliberate **superset** of the core stdio server's tools:
+core `memory_add(namespace, text) -> str` gains `source`/`t_ref` and a
+structured return; core's `memory_clear` is intentionally absent (no
+deletion surface). Parity is with the underlying `Memory` API, not the core
+tool signatures — see the §12 parity test for exactly what is pinned.
+
+Namespaces are created implicitly: the engine's `_store()` lazily creates
+`<safe_ns>.db` on first access, so the first accepted `memory_add` (or even a
+search) materializes the file. There is no create-namespace endpoint; the
+reserved-namespace guard (§5) applies to both paths.
+
+`t_ref` (epoch-ms) is the world/event time that becomes `valid_at` and
+anchors the temporal spine. Live agents omit it (wrapper fills `now`);
+replay/import supplies it — omitting it on historical data silently collapses
+the spine's ordering, so the README documents both modes.
+
+**Docker mode — HTTP data plane.** Same tool vocabulary over streamable-HTTP
+MCP at `/mcp` (Python `mcp` SDK / FastMCP mounted into FastAPI), plus a REST
+mirror for non-MCP agents:
+
+- `POST /v1/{namespace}/memories {text, source?, t_ref?}`
+  → `{fact_ids, superseded_count}`
+- `POST /v1/{namespace}/search {query, k?, latest_only?}` → full hit objects
+  with score breakdown (richer than the MCP tool on purpose).
+
+Connect snippet (rendered on the console's Overview page in Docker mode):
 
 ```bash
 claude mcp add --transport http lean-memory http://<host>:8377/mcp \
-  --header "Authorization: Bearer lm_live_…"
+  --header "Authorization: Bearer $LM_API_KEY"
 ```
 
-**REST mirror (secondary).** Same handlers, for non-MCP agents:
+Both modes: acquire the namespace's intra-process write lock (adds), call the
+engine under the retry contract, time it, record the event, return.
+`Memory.search`'s access-stat bump (`touch()`) is correct live-usage
+behavior, not a defect.
 
-- `POST /v1/memories  {text, source?, t_ref?}` → `{fact_ids, superseded_count}`
-- `POST /v1/search    {query, k?, latest_only?}` → full hit objects with
-  score breakdown (richer than the MCP tool on purpose; MCP output stays
-  small for agent context windows).
+## 7. Read path (human-facing console API)
 
-Both paths: acquire the tenant write lock (adds only), call the engine, time
-it, record the event (§5), return. `Memory.search`'s access-stat bump
-(`touch()`) is **correct** service behavior here (live usage signal), not a
-defect.
+**Auth by mode.** Local mode: bind 127.0.0.1 only; a random per-launch
+session token is embedded in the auto-opened URL (`?token=…`) and required on
+every request. Token hygiene: all responses set `Referrer-Policy:
+no-referrer` (so the tokened URL cannot leak via Referer if memory content
+ever contains an external link the user clicks); the SPA strips `?token` from
+the address bar via `history.replaceState` on boot and holds it in React
+context; the server validates the `Host` header is `127.0.0.1`/`localhost`
+(DNS-rebinding belt-and-suspenders — the token is the second factor, not the
+only one). The token dies with the process. Docker mode: `Authorization:
+Bearer <LM_API_KEY>` on everything; the SPA login screen keeps the key in
+React context — never localStorage, never a cookie; a page reload re-prompts
+(accepted for v1). Single-tenant means one trust domain; plane-scoping
+returns with multi-tenancy in Tier 2.
 
-## 7. Control + observation plane (human-facing)
+**Mode detection + auth probe — `GET /views/whoami`** (both modes) →
+`{mode: "local"|"docker", auth: "token"|"bearer", authenticated: bool,
+data_root: str}`. The `mode`/`auth` fields are readable without credentials;
+`authenticated` reflects the presented credential, and all other endpoints
+401 without a valid one. The SPA calls it on load: docker + 401 → login
+screen; local + 401 → plain error (local has no login screen).
 
-Auth: `Authorization: Bearer <ADMIN_TOKEN>` on **all** `/admin` and `/views`
-routes, including test-search and metrics.
+**Read-only SQL connections (error-driven, not heuristic).** Enumeration
+endpoints open engine DBs with `file:<path>?mode=ro` — **always**, in both
+modes; `mode=ro` reads WAL and non-WAL files, checkpointed or not, with or
+without sidecars (empirically verified during self-review; the earlier
+"error 14 without sidecars" claim did not reproduce). `immutable=1` is used
+**only** as a per-request, short-lived fallback when the `mode=ro` open
+actually raises `SQLITE_CANTOPEN` (error 14 — genuinely read-only media),
+and is documented as a best-effort snapshot; it is never used while a writer
+may exist, because `immutable=1` on a changing file is undefined behavior.
 
-**Login flow:** `GET /admin/whoami` returns 200 if the bearer matches
-`ADMIN_TOKEN`, else 401. The SPA login screen validates the typed token
-against it, then keeps the token in a React context (module memory) — never
-localStorage, never a cookie, never a URL. Consequence (accepted for v1): a
-full page reload requires re-entering the token.
+**test-search is the one write-path exception:** it runs through a
+short-lived **writable** `Memory` instance from the engine pool (read-only
+connections cannot execute `touch()`'s UPDATE), acquiring the namespace's
+intra-process write lock. On `SQLITE_BUSY` (cross-process contention with a
+live wrapper) the search still returns hits; only the `touch()` stat-bump is
+best-effort — a failed bump is logged and swallowed, never surfaced as an
+error.
 
-Management:
+**Pagination envelope (list endpoints; the WP8c contract):** `page` 1-based,
+`page_size` default 50 (cap 200); responses `{items, page, page_size,
+total}` where `total` is the count **after** filters. Orderings: facts
+`created_at DESC, id DESC`; episodes `t_ref DESC`; events `ts DESC`; entities
+fact-count DESC then name. Exception: `GET /views/namespaces` is
+intentionally unpaginated (bounded by files on disk), ordered fact-count DESC
+then name, and returns a bare array.
 
-- `POST /admin/tenants {name}` — validation: reject empty/whitespace-only
-  names (422); compute the sanitized namespace; reject with 409 if the
-  namespace is empty, begins with `_`, or already exists (even under a
-  different display name — the namespace is the physical file, so namespace
-  collision is the real constraint); 409 on duplicate display name.
-- `GET /admin/tenants` · `POST /admin/tenants/{id}/keys` → full key, once ·
-  `DELETE /admin/keys/{key_id}` (revoke)
-- `DELETE /admin/tenants/{id}` — **pinned lifecycle:** (1) acquire the
-  tenant's write lock; (2) delete tenant + keys + events in one `_server.db`
-  transaction (new data-plane calls now 401/404); (3) evict the pooled
-  `Memory` instance and `close()` it; (4) unlink `<ns>.db`, `<ns>.db-wal`,
-  `<ns>.db-shm`; (5) release the lock. In-flight calls holding the lock
-  complete first; a subsequent add must 404, not recreate the file. UI guards
-  with a name-retype confirm dialog. (This is namespace purge, which WP5's
-  design brief already recognizes as "trivially true" and the tenant-level
-  deletion answer; the ADD-only invariant governs per-fact history *within* a
-  store.)
+Endpoints (namespace-scoped where applicable):
 
-**Pagination envelope (shared by every list endpoint, binding for WP8c):**
-`page` is 1-based, `page_size` defaults to 50 (cap 200); responses are
-`{items, page, page_size, total}`. Deterministic orderings: facts by
-`created_at DESC, id DESC`; episodes by `t_ref DESC`; events by `ts DESC`;
-entities by fact count DESC, then name.
-
-Read-only inspection (all against `mode=ro` SQLite connections — safe because
-this server process is the sole owner of `/data`, and WAL allows concurrent
-readers):
-
-- `GET /views/tenants/{id}/stats` — fact counts (latest/retired), entities,
-  episodes, supersession chains, DB file size, top predicates
-- `GET /views/tenants/{id}/facts?latest_only&predicate&entity&min_salience&q&page`
-  — filter semantics: `entity` matches entity **name** (case-insensitive),
-  resolved to `subject_id` via a join; `predicate` is an exact match;
-  `min_salience` is a float on the engine's 0–10 salience scale filtering
-  `salience >= value`; `latest_only` defaults `true`; `q` uses the FTS5 index
-  (text filtering, distinct from real search). Response rows carry
-  `subject` = `entity.name` joined on `subject_id`, and objects display
+- `GET /views/namespaces` — discovered from `*.db` (skipping `_*.db`), with
+  per-namespace counts: facts latest/retired, entities, episodes,
+  supersession chains, file size, top predicates, adds/searches in the last
+  7 days (from `_events.db`; `origin:"ui"` excluded), earliest stored event ts.
+- `GET /views/{ns}/facts?latest_only&predicate&entity&min_salience&q&page` —
+  `entity` matches entity **name** (case-insensitive) joined via
+  `subject_id`; `predicate` exact; `min_salience` float on the engine's 0–10
+  scale (`salience >= value`); `q` uses the FTS5 index (text filter, distinct
+  from real search). Rows carry `subject` = `entity.name`; objects display
   `object_literal` (`object_id` is effectively always NULL in current data).
-- `GET /views/tenants/{id}/facts/{fact_id}` — full row + supersession chain
-  (walk `superseded_by` both directions) + source episode
-- `GET /views/tenants/{id}/episodes?page` and `/episodes/{id}` (with extracted
-  facts)
-- `GET /views/tenants/{id}/entities?page` — names + fact counts (no graph;
-  current data has literal-only objects and NULL entity types)
-- `GET /views/tenants/{id}/events?kind&page` — activity feed / traces
-  (`kind` ∈ `add|search`)
-- `GET /views/tenants/{id}/metrics?window=` — `window` is a validated enum
-  `1d|7d|30d` (default `7d`): adds/searches per day, facts-per-add,
-  supersession rate, search latency p50/p95, aggregated from `event`.
-  Events with `origin:"ui"` are **excluded** from aggregates (operator poking
-  is not agent usage) but appear in the feed. The response includes the
-  earliest event `ts` still stored, so the UI labels the true window when the
-  §13 retention cap has truncated history.
-- `POST /views/tenants/{id}/test-search {query, k}` — the UI's manual query
-  box; runs a real search via the engine, records the event with
-  `origin:"ui"`, labeled in the UI as a live search that updates access stats
+- `GET /views/{ns}/facts/{fact_id}` — full row + supersession chain (walk
+  `superseded_by` both directions) + source episode.
+- `GET /views/{ns}/episodes?page` · `GET /views/{ns}/episodes/{id}` (with
+  extracted facts).
+- `GET /views/{ns}/entities?page` — names + fact counts (a list, not a graph:
+  current data has literal-only objects and NULL entity types).
+- `GET /views/{ns}/events?kind&page` — activity/traces; `kind` ∈ `add|search`
+  only (failed calls keep their kind; `payload.error` marks them, §5).
+- `POST /views/{ns}/test-search {query, k}` — the manual query box; real
+  search via the writable path above; records the event with `origin:"ui"`,
+  labeled in the UI as a live search that updates access stats.
 
 ## 8. Web UI
 
 React 18 + TypeScript, Vite, built with Bun; react-router, Tailwind CSS v4,
-Recharts. Served by FastAPI from `server/src/lean_memory_server/static/`.
-Aesthetic direction set at implementation time via the frontend-design skill —
-requirement: it must read as a purposeful observability console, not a
-default admin template.
+Recharts (used sparingly — sparklines on Overview, the timeline visual).
+Served from `console/src/lean_memory_console/static/`. Aesthetic direction
+set at implementation time via the frontend-design skill — requirement: a
+purposeful verification instrument, not an admin template and not a
+metrics-wall.
 
-Pages (tenant switcher in the header, admin login screen up front):
+Pages (namespace switcher in the header):
 
-1. **Dashboard** — per-tenant stat tiles (facts latest/retired, entities,
-   episodes, chains) + charts: activity over time, facts-per-add, search
-   latency, supersession rate.
-2. **Activity** — polled feed (3–5 s) of add/search events, newest first,
-   error badge on `payload.error`; add events expand to the facts
-   created/superseded, search events link to the trace view.
-3. **Memories** — filterable/sortable fact table (fact_text, subject,
+1. **Overview** — namespace cards: counts, top predicates, 7-day
+   adds/searches sparkline, supersession rate and facts-per-add as plain
+   numbers (the "microscope" compromise — no dashboard page). Docker mode
+   shows the connect snippet here; empty state IS the connect snippet.
+2. **Memories** — filterable/sortable fact table (fact_text, subject,
    predicate, object_literal, salience, confidence, is_latest, access_count,
-   valid_at). Fact detail drawer: full metadata, **supersession timeline**
-   (chain rendered oldest→newest with valid intervals), provenance episode.
-4. **Episodes** — transcript list (episode.raw, ordered by t_ref) → per-episode
-   extracted facts (exposes the facts-per-turn granularity).
-5. **Traces** — search events with expandable per-hit score decomposition
-   (final = 0.6·relevance + 0.2·recency + 0.2·importance; dense/sparse ranks;
-   RRF) + the manual test-query box.
-6. **Tenants** — list, create, delete (guarded), API keys (issue/revoke), the
-   Claude Code / REST connect snippets.
+   valid_at). Fact drawer: full metadata, **supersession timeline** (chain
+   oldest→newest with valid intervals — the wedge visual), provenance episode.
+3. **Episodes** — transcript (episode.raw by t_ref) → facts extracted per
+   turn (the granularity window).
+4. **Activity & Traces** — polled feed (3–5 s) of add/search events; add rows
+   expand to facts created/superseded; search rows expand to the per-hit
+   score decomposition (final = 0.6·relevance + 0.2·recency + 0.2·importance;
+   dense/sparse ranks; RRF) + the test-query box. Shows the "connect via
+   observing MCP" hint when no sidecar exists.
 
-## 9. Deployment
+## 9. Distribution: Claude Code plugin (primary) + PyPI + Docker
 
-`deploy/Dockerfile`, multi-stage with **named final targets**:
+**Plugin** (verified against current plugin docs): on extraction the repo
+doubles as its own marketplace (`.claude-plugin/marketplace.json` at the
+marketplace root — the directory containing `.claude-plugin/` — with plugin
+`source: "./plugin"`).
 
-1. `oven/bun` stage: `bun install && bun run build` in `ui/` → static assets.
-2. `FROM python:3.13-slim AS slim` — installs `server/` (which installs
-   `lean-memory` from the repo checkout at build time) + copies assets.
-   Never installs `[models]`; stub embedder; tiny image; vector scores are
-   semantically meaningless and the UI labels them (§10).
-3. `FROM slim AS full` — adds `lean-memory[models]` (CPU torch, real Qwen3
-   embedder + reranker).
+- `.mcp.json`: the **stdio entry only** —
+  `{"command": "uvx", "args": ["lean-memory-console", "mcp"]}`. The Docker
+  HTTP connection is deliberately NOT a second auto-enabled entry (it would
+  hard-fail config parse when `LM_API_KEY` is unset and spawn a dead
+  connection otherwise); Docker users run the one-line
+  `claude mcp add --transport http …` snippet the console displays. If Tier 2
+  revisits this, `user_config` (keychain-stored key) is the documented path.
+- `commands/`: `/memory:ui` (launch/open the local viewer),
+  `/memory:status` (resolved data root, namespaces, connect snippets),
+  `/memory:server-up|down` — resolves the compose file via
+  `lean-memory-console --print-compose-path` (the copy shipped inside the
+  installed package); **the plugin does not bundle its own copy**, so
+  `deploy/docker-compose.yml` in the repo is the single source of truth.
+- **WP8a lands here later**: `PreCompact` (save memories before compaction)
+  and `SessionStart` (recall on start) hooks ship as a plugin update,
+  post-signal, per the roadmap.
 
-Build: `docker build --target slim|full`. `docker-compose.yml` sets
-`build.target: full`; README documents both and the full image's size +
-first-run model download into a cached volume.
+Install flow: `/plugin marketplace add <owner>/lean-memory-console` →
+`/plugin install lean-memory`. Also distributed as plain PyPI
+(`uvx lean-memory-console`) and Docker (below) for non-Claude-Code users.
 
-Env: `LM_DATA_ROOT` (default `/data`), `ADMIN_TOKEN` (**required** — server
-refuses to boot without it), `PORT` (default 8377), `LM_SERVER_MODELS`
-(`auto|stub`, default `auto`): `auto` uses real models when
-`lean-memory[models]` is importable (full image), else stubs; `stub` forces
-the stub embedder and short-circuits **before any torch import**, so the full
-image can run the offline test path. sqlite-vec is a hard dependency of both
-images (the engine loads it at store-open; the vec0 index is always real —
-only embedding *quality* differs) and is always boot-checked.
+## 10. Deployment
 
-Volumes: `/data` (tenant DBs + `_server.db`), `~/.cache/huggingface` (full
-image model cache).
+**Data-root resolution (one rule, both commands):** `--root` >
+`LM_DATA_ROOT` > `~/.lean_memory`. The console serves exactly one root and
+never auto-merges roots. Trap closed explicitly: the core engine's *own*
+default root is `./lm_data` (not `~/.lean_memory`), so `/memory:status` and
+the onboarding screen print the resolved root and warn when `./lm_data`
+exists but is not the served root — a human must not silently inspect an
+empty `~/.lean_memory` while their agent wrote to `./lm_data`.
 
-## 10. Error handling
+**Local:** `uvx lean-memory-console serve [--root …] [--port 8377]` — binds
+127.0.0.1, prints/opens the tokened URL, Ctrl-C to stop.
+`lean-memory-console mcp [--root …]` for the observing wrapper.
+`lean-memory-console --print-compose-path` prints the packaged compose file
+path (§9).
 
-- No tenants yet / empty tenant → onboarding screen with the connect snippet,
+**Docker (single-tenant):** `deploy/Dockerfile`, multi-stage with named final
+targets: bun build stage → `FROM python:3.13-slim AS slim` (installs
+`console/`, copies assets; never installs `[models]`; stub embedder) →
+`FROM slim AS full` (adds `lean-memory[models]`, CPU torch, real embedder +
+reranker). `docker-compose.yml` sets `build.target: full` — **full is the
+default**; slim exists for API/UI development and is never the documented
+first-run path (stub vectors would recreate the FakeEmbedder
+first-impression failure the quality gate exists to fix).
+
+Env: `LM_DATA_ROOT` (default `/data` in Docker), `LM_API_KEY` (**required in
+Docker mode** — refuse to boot without it; unused in local mode), `PORT`
+(default 8377), `LM_CONSOLE_MODELS` (`auto|stub`, default `auto`: real models
+when `lean-memory[models]` is importable, else stubs; `stub` short-circuits
+before any torch import). sqlite-vec is a hard dependency of both images (the
+engine loads it at store-open) and is always boot-checked. Volumes: `/data`,
+`~/.cache/huggingface` (full image).
+
+Boot validation (both modes): data root writable (serve: readable),
+`LM_API_KEY` set (Docker mode), sqlite-vec loadable; fail fast with a clear
+message.
+
+## 11. Error handling
+
+- Empty data root → onboarding screen with connect snippets (plugin install,
+  observing-MCP line, Docker snippet) and the resolved-root warning (§10),
   not empty tables.
-- Stub-embedded data → banner on Traces/Dashboard: "semantic scores are
-  stub-generated" (detected from the resolved `LM_SERVER_MODELS` mode).
-- Known engine issue surfaced honestly: recency component reads ≈0 on
-  historical timestamps (dead-recency bug on the WP0 backlog) — trace view
-  footnotes it rather than hiding it.
-- Concurrency: `engine.py` keeps one `Memory` instance per tenant and an
-  asyncio lock per tenant. Writes (`add`, delete lifecycle, key mutations)
-  take the lock; reads don't. The lock is held across add + supersession
-  detection (§5).
-- Malformed/oversized payloads → 422 with structured error; engine exceptions
-  → 500, with the event still recorded (`payload.error`) so failures are
-  visible in the activity feed.
-- Boot-time validation: `LM_DATA_ROOT` writable, `ADMIN_TOKEN` set, sqlite-vec
-  loadable; fail fast with a clear message.
+- Stub embeddings (`LM_CONSOLE_MODELS` resolved to stub) → banner on
+  Traces/Overview: "semantic scores are stub-generated".
+- Missing sidecar (`_events.db` absent) → Traces page hint, not an error.
+- Namespace file disappears between requests (user deleted it) → 404 with a
+  friendly message; discovery refreshes on every `/views/namespaces` call.
+- Malformed/oversized payloads → 422 structured error; engine exceptions →
+  500 with the event still recorded (`payload.error`) where the event write
+  itself succeeds — event-write failure degrades to a log line (§5), never a
+  masked response.
+- Concurrency: one `Memory` instance + one asyncio write lock per namespace
+  **per process** (intra-process serialization only); the lock is held across
+  add + supersession detection (§5). Cross-process safety is the §6 contract:
+  console-owned `busy_timeout` + bounded retry-on-`SQLITE_BUSY` — the engine
+  itself provides WAL only, no busy timeout.
 
-## 11. Testing
+## 12. Testing
 
-`server/tests/` (own pytest config; core repo suite untouched and green):
+`console/tests/` (own pytest config; core repo suite untouched and green):
 
-- Auth: no key → 401; revoked key → 401; key of tenant A on tenant B's data →
-  401/404 (isolation is the highest-value test). **Plane-scoping:** admin
-  token on `POST /v1/memories` → 401; tenant key on `GET /views/...` → 401.
-- Tenant lifecycle: duplicate name → 409; `"a b"` vs `"a/b"`
-  (namespace-collision after sanitization) → 409; `_server` and
-  empty-sanitizing names rejected; delete removes `.db`/`.db-wal`/`.db-shm`,
-  cascades keys/events, and a subsequent add 404s without recreating the file.
-- Round-trip: MCP add → search returns the fact; REST mirror parity; `t_ref`
-  supplied → `valid_at` matches it.
-- Events: two contradicting adds on one slot → second add's event has the
-  first fact's id in `superseded_fact_ids` (exact-id assertion); search event
-  records the full score payload with `origin:"agent"`; test-search records
-  `origin:"ui"` and is excluded from metrics aggregates.
-- Inspection SQL: stats/facts/chain/episodes endpoints against the committed
-  fixture DB.
-- Boot validation: missing ADMIN_TOKEN → exit non-zero.
-- All offline, stub backends only, no network, no model downloads.
+- **Observing MCP:** in-process stdio round-trip — add → search returns the
+  fact; event rows written to `_events.db`; `t_ref` supplied → `valid_at`
+  matches; namespace `_events`/`_server`/empty-sanitizing rejected.
+- **Supersession events:** two contradicting adds on one slot → second add's
+  event carries the first fact's id in `superseded_fact_ids` (exact-id
+  assertion).
+- **Parity (wrapper vs core MCP):** the wrapper exposes exactly
+  `{memory_add, memory_search}` (`memory_clear` intentionally absent); each
+  shared tool accepts at least the core args (`namespace`, `text`/`query`,
+  `k`); the wrapper's extras (`source`, `t_ref`, structured returns) are
+  asserted as deliberate additions. Fails if the wrapper drops a core arg or
+  grows a tool core lacks.
+- **Auth:** Docker mode — no key → 401, wrong key → 401, `LM_API_KEY` missing
+  at boot → exit non-zero. Local mode — request without `?token` → 401.
+  `GET /views/whoami` body shape asserted in both modes.
+- **Read path:** stats/facts/chain/episodes/entities endpoints against the
+  committed fixture; pagination envelope shape (`total` = post-filter);
+  `latest_only` default; open strategy — `mode=ro` succeeds with and without
+  a `-wal` sidecar, and `immutable=1` is attempted only after an actual
+  error-14 open failure.
+- **Concurrency:** test-search returns hits while another connection holds a
+  write on the namespace (stat-bump best-effort); two processes interleaving
+  event INSERTs lose nothing (busy_timeout); retention boundary — 10 001st
+  event prunes to exactly 10 000 and `/views/namespaces` surfaces the
+  earliest survivor ts.
+- **REST mirror parity** with the MCP tools; test-search records
+  `origin:"ui"` and is excluded from Overview's 7-day aggregates.
+- All offline, stub backends, no network, no model downloads.
 
-**Fixture DB:** built once by `server/tests/fixtures/build_fixture.py` (stub
-backends, deterministic) and checked in. Minimum contents — these are the
-inspection tests' concrete assertions: 1 tenant, 2 episodes, ≥1 supersession
-chain of length ≥2 (one retired + one latest, so chain-walk is exercised in
-both directions), ≥1 entity with 2 facts, 1 recorded add event with
-`superseded_count > 0`, 1 search event with a full score payload. The builder
-is re-run and the `.db` re-committed whenever the schema mirrored by
-`inspect_sql.py` changes.
+**Fixture:** `console/tests/fixtures/build_fixture.py` (stub backends,
+deterministic), output checked in; contents are the acceptance criteria:
+2 namespaces, 2 episodes each, ≥1 supersession chain of length ≥2 (one
+retired + one latest), ≥1 entity with 2 facts, 1 add event with
+`superseded_count > 0`, 1 search event with a full score payload, 1 event
+with `payload.error`. Rebuilt + re-committed when the mirrored schema changes.
 
-Frontend gate: `bun run typecheck && bun run build` in CI; no component tests
-in v1.
+Frontend gate: `bun run typecheck && bun run build`.
 
-End-to-end verification (manual, pre-merge): `docker compose up`, create a
-tenant, connect a real Claude Code session via MCP, store + search memories,
-verify every UI page renders the resulting state (superpowers `verify` flow).
+End-to-end verification (manual, pre-merge): install the plugin from the
+local marketplace path, let a real Claude Code session store + search
+memories through the observing MCP, open `/memory:ui`, verify every page
+renders the resulting state; then `docker compose up`, connect via the HTTP
+snippet, repeat (superpowers `verify` flow).
 
-## 12. Migration path / future
+## 13. Migration path / engine-coupling debt
 
-- **WP4 lands** → replace `inspect_sql.py` internals with
-  `Memory.get/get_all/history` and `search(explain=True)`, and take
-  supersession data from the API instead of the §5 stopgap query; the
-  `/views` API shape is designed to survive that swap unchanged.
-- **WP8c** → the TS client targets `/v1` and the §7 pagination envelope as-is.
-- Later candidates (explicitly out of v1): SSE live feed, per-tenant usage
-  quotas, RBAC, redaction tooling once WP5's deletion semantics are approved.
+- **WP4 lands** → `inspect_sql.py` internals swap to
+  `Memory.get/get_all/history` + `search(explain=True)`; supersession data
+  comes from the API instead of the §5 stopgap. The `/views` shapes survive
+  unchanged.
+- **Engine `busy_timeout` (lane-A debt):** the proper long-term fix for the
+  §6 cross-process contract is `PRAGMA busy_timeout` in the engine's
+  `_connect()` — deferred behind the lane-D rule; the console's retry wrapper
+  is the stopgap and can be deleted when the engine gains it.
+- **Schema-mirror tripwire (fail-loud, not a comment):** the fingerprint is
+  computed at test time from the **installed** `lean_memory` package's
+  `store/schema.py` via `importlib.resources` (concatenated `CREATE`
+  statements extracted from the file text, hashed) — never from a copy
+  checked into `console/`. The expected digest is a checked-in constant;
+  dependency drift turns the suite red. The same mechanism guards the
+  `_SAFE_NS` mirror in `config.py` (fingerprint of `memory.py`'s sanitizer
+  lines).
+- **Tier 2 trigger** (§14) is demand, not time: multiple humans/teams asking
+  for isolation and key management.
 
-## 13. Risks
+## 14. Tier 2 (deferred, design preserved from v1)
 
-- **MCP streamable-HTTP + auth ergonomics in Claude Code** — verify the
-  `--header` bearer flow against a real session early (plan task 1 risk
-  spike), fall back to key-in-URL-path (`/mcp/<key>`) if header propagation
-  proves unreliable.
-- **Image size (full)** — torch CPU wheels are heavy; acceptable and
-  documented, `slim` exists for everything but semantic search.
-- **Event log growth** — search payloads store k hits each. Retention: hard
-  cap of 10k events per tenant, pruned oldest-first on write. Metrics are
-  computed from whatever events remain; the metrics response's earliest-`ts`
-  field (§7) makes the truncation visible instead of silent.
-- **Engine evolves under us** (lane A moves fast) — the server pins
-  `lean-memory` to the repo checkout at Docker build time; the read-only SQL
-  and the `_SAFE_NS` mirror are duplicated by necessity until WP4, and
-  `inspect_sql.py`/`control.py` carry header comments naming the engine files
-  they mirror, re-verified on every engine bump.
+On demonstrated team demand, the Docker mode grows the v1 platform layer —
+all of it already designed and reviewed in v1 of this spec (git history of
+this file, commit `bb2948d`): tenant registry + hashed per-tenant API keys in
+a `_server.db` control plane, tenant CRUD with the pinned delete lifecycle
+(lock → registry cascade → close pooled instance → unlink db/wal/shm),
+plane-scoped credentials (tenant keys vs admin token, wrong class → 401),
+per-tenant event scoping, and the tenant management UI page. Nothing in Tier
+1's architecture blocks it: namespaces become per-tenant namespace *sets*,
+`_events.db` gains a tenant column, and the auth dependency swaps from the
+single `LM_API_KEY` to key-resolution.
+
+## 15. Risks
+
+- **MCP streamable-HTTP + auth ergonomics in Claude Code** (Docker mode) —
+  verify the `--header` bearer flow against a real session early; fall back
+  to key-in-URL-path if header propagation proves unreliable. Local mode is
+  unaffected (stdio).
+- **Observing-wrapper drift vs core MCP server** — covered by the §12 parity
+  test (name equality, core-args superset, deliberate-extras assertion); the
+  wrapper tracks the `Memory` API, not the core tool signatures.
+- **Cross-process writers** — the §6 retry contract is a stopgap, not a lock
+  manager; pathological contention (many sessions hammering one namespace)
+  degrades to retries and eventual `SQLITE_BUSY` surfacing in `payload.error`.
+  Documented guidance: one namespace per project/session.
+- **Image size (full)** — torch CPU wheels are heavy; documented; slim exists
+  but is never the first-run path.
+- **Event log growth** — 10k/namespace cap, atomic oldest-first pruning,
+  truncation surfaced via earliest-ts (§5).
+- **Engine evolves under us** — the schema-fingerprint tripwire (§13) turns
+  silent drift into a red suite instead of a wrong UI.
