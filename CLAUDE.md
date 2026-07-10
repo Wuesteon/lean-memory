@@ -56,3 +56,6 @@ the user-facing quickstart.
 - Benchmarks live in `bench/` (BET-2: `bet2_*.py`; Phase 2: `phase2_*.py`).
   Frozen-config discipline: any number without a pinned config hash, judge
   model, judge prompt, and backbone is not publishable.
+- Roadmap work is clustered into worktree-sized packets with dependencies,
+  gates, and file-conflict lanes: `docs/superpowers/workpackets.md`. Claim a
+  packet there before starting it; one worktree per packet.
