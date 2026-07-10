@@ -55,6 +55,25 @@ router `by_reason` facts from this sweep constrain that work:
   them. The heuristic change targets the *conversational* 65.6% coref floor
   (see 2026-07 baseline below), which the goldset does not exercise.
 
+## post-Step-0 goldset check (subject-only prior_entity — Task 6 scope amendment)
+
+- Change: `_references_prior_entity` narrowed to the SUBJECT endpoint only
+  (`src/lean_memory/extract/router.py`). Re-mentioning a known entity as the OBJECT
+  is normal discourse; only a non-self prior entity as the fact's SUBJECT is a
+  cross-turn edge. This retires the confidence-independent `prior_entity` floor
+  (57% of real candidates, see the Task 5 observation above) that no threshold pair
+  could clear. Self-exemption and `introduced_here` logic unchanged; reason string
+  `"prior_entity"` unchanged.
+- Command: `bench/bet2_ablation.py` (offline arm — plumbing/invariants only).
+- Escalation rate on the frozen goldset: **10.1%** Wilson95% [5.2%, 18.7%]
+  (gate: < 20% — PASS). router by_reason: `{'prior_entity': 2, 'derives': 6,
+  'coreference': 1}`.
+- Unchanged from the post-Task-4 goldset rate (10.1%): the goldset's 2 `prior_entity`
+  escalations are both SUBJECT-endpoint edges (the fact is about a prior third party),
+  so narrowing away the object endpoint leaves them intact. The change targets the
+  *conversational* 57% object-remention floor, which the goldset does not exercise —
+  the same shape as the Task-4 coref fix.
+
 ## 2026-07 baseline (pre-fix)
 
 - Probe: `phase2_escalation_probe.py --slice ku --namespaces 5 --turns-per-ns 40`

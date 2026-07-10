@@ -375,12 +375,19 @@ class RecallBiasedRouter:
     def _references_prior_entity(
         self, cand: Candidate, known: set[str], self_key: str = ""
     ) -> bool:
-        """True iff the candidate touches an entity SEEN BEFORE but not introduced here.
+        """True iff the candidate's SUBJECT is a non-self entity SEEN BEFORE but not
+        introduced here — a hard cross-turn edge the LLM must own.
 
-        We check both endpoints (subject and object). If Pass 2 told us which names were
-        introduced in this episode (`introduced_here`), an endpoint counts as "prior"
-        only when it's in `known` AND not in that introduced set. Without that hint we
-        fall back to plain `known` membership — still recall-biased.
+        SUBJECT-only (Task 6, scope amendment 2026-07-10): checking BOTH endpoints put
+        `prior_entity` at 57% of real candidates (181/316 at gliner 0.5, 2026-07 sweep),
+        confidence-independent, so no threshold pair could reach the <20% gate. Re-mentioning
+        a known entity as the OBJECT ("I visited Acme again") is normal discourse and routes
+        on the other signals; only a previously-seen non-self entity appearing as the fact's
+        SUBJECT (a third party the fact is about) is a genuine cross-turn edge.
+
+        If Pass 2 told us which names were introduced in this episode (`introduced_here`),
+        the subject counts as "prior" only when it's in `known` AND not in that introduced
+        set. Without that hint we fall back to plain `known` membership — still recall-biased.
 
         `self_key` (normalised) is the namespace-owner / first-person persona. It is
         always in `known` after the first turn, but it is NOT a cross-turn signal —
@@ -392,20 +399,18 @@ class RecallBiasedRouter:
         introduced = _cand_introduced_here(cand)
         introduced_norm = {_norm(x) for x in introduced} if introduced is not None else None
 
-        for endpoint in (_cand_subject_name(cand), _cand_object_name(cand)):
-            key = _norm(endpoint)
-            if not key or key not in known:
-                continue
-            # The self-entity (namespace owner / "user") is omnipresent across turns but
-            # is never a genuine cross-turn reference — skip it.
-            if self_key and key == self_key:
-                continue
-            if introduced_norm is not None and key in introduced_norm:
-                # Re-mentioned an entity that this very episode introduced ⇒ intra-episode,
-                # deterministically resolvable ⇒ not a cross-turn escalation.
-                continue
-            return True
-        return False
+        key = _norm(_cand_subject_name(cand))
+        if not key or key not in known:
+            return False
+        # The self-entity (namespace owner / "user") is omnipresent across turns but
+        # is never a genuine cross-turn reference — skip it.
+        if self_key and key == self_key:
+            return False
+        if introduced_norm is not None and key in introduced_norm:
+            # Re-mentioned an entity that this very episode introduced ⇒ intra-episode,
+            # deterministically resolvable ⇒ not a cross-turn escalation.
+            return False
+        return True
 
     @staticmethod
     def _is_possible_derives(cand: Candidate, text: str) -> bool:

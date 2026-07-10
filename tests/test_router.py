@@ -219,3 +219,32 @@ def test_first_person_self_entity_not_coref():
     )
     to_type, direct = r.route([cand])
     assert cand in direct
+
+
+# ── Task 6 Step 0: subject-only prior_entity (scope amendment, user-approved) ──
+# `prior_entity` measured at 57% of real candidates (2026-07 sweep), confidence-
+# independent, because the OLD contract escalated on either endpoint. Re-mentioning
+# a known entity as the OBJECT is normal discourse; only a non-self entity as the
+# candidate's SUBJECT is a genuine cross-turn edge. Object endpoint dropped from the
+# check; self-exemption and `introduced_here` logic unchanged.
+
+
+def test_object_remention_of_known_entity_routes_direct():
+    """Re-mentioning a known entity as the OBJECT is normal discourse, not a
+    cross-turn edge — measured at 57% of real candidates (2026-07 sweep)."""
+    r = RecallBiasedRouter(conf_threshold=0.3)
+    cand = _grounded_cand(subject="user", obj="Acme", text="I visited Acme again today.",
+                          predicate="works_at", subject_span=None)
+    to_type, direct = r.route([cand], known_entities={"Acme"})
+    assert cand in direct
+    assert r.last_stats["by_reason"].get("prior_entity", 0) == 0
+
+
+def test_prior_subject_still_escalates():
+    """A non-self subject seen in a PRIOR turn is a genuine cross-turn edge."""
+    r = RecallBiasedRouter(conf_threshold=0.3)
+    cand = _grounded_cand(subject="Acme", obj="Berlin", predicate="located_in",
+                          text="Acme is located in Berlin.")
+    to_type, _ = r.route([cand], known_entities={"Acme"})
+    assert cand in to_type
+    assert r.last_stats["by_reason"]["prior_entity"] == 1
