@@ -81,17 +81,15 @@ _KNOWN_PREDICATES = frozenset(
 ) | _STRUCTURAL_RELATIONS
 
 # ── coreference / ellipsis heuristics ──
-# Pronouns and demonstratives that make a span non-self-contained. Word-boundaried and
-# case-insensitive. "zero-pronoun" (elided subject) is approximated structurally below.
-_COREF_PRONOUNS = re.compile(
-    r"\b("
-    r"he|him|his|she|her|hers|they|them|their|theirs|"
-    r"it|its|this|that|these|those|"
-    r"the\s+former|the\s+latter|the\s+same|"
-    r"there|then"
-    r")\b",
-    re.I,
-)
+# Endpoint-level pronouns/demonstratives: a candidate whose OWN subject or object
+# is one of these is not self-contained. This replaces the old whole-text scan,
+# which fired on conversational filler ("that", "it", "there") in 65.6% of real
+# turns (2026-07 baseline probe) and put a hard floor over the <20% target.
+_ENDPOINT_PRONOUNS = frozenset({
+    "he", "him", "his", "she", "her", "hers", "they", "them", "their", "theirs",
+    "it", "its", "this", "that", "these", "those",
+    "the former", "the latter", "the same",
+})
 
 # Inferential cue words → a candidate that *might* be a `derives` edge. The router only
 # flags it for the LLM to confirm; the router itself NEVER assigns `derives`.
@@ -342,8 +340,9 @@ class RecallBiasedRouter:
         if _cand_confidence(cand) < self.conf_threshold:
             reasons.append(REASON_LOW_CONF)
 
-        # 2. Coreference / ellipsis / zero-pronoun: the span is not self-contained.
-        if self._has_coref_or_ellipsis(text):
+        # 2. Coreference / ellipsis / zero-pronoun: the candidate itself is not
+        #    self-contained (endpoint-scoped — see _coref_or_ellipsis).
+        if self._coref_or_ellipsis(cand, text, self_key):
             reasons.append(REASON_COREF)
 
         # 3. References a prior-turn/session entity not introduced in this episode.
@@ -356,15 +355,20 @@ class RecallBiasedRouter:
 
         return reasons
 
-    @staticmethod
-    def _has_coref_or_ellipsis(text: str) -> bool:
-        if not text:
-            return False
-        if _COREF_PRONOUNS.search(text):
-            return True
-        # Zero-pronoun / ellipsis: a clause that *leads* with a conjunction or a bare
-        # verb has dropped its subject and depends on prior context to resolve.
-        if _ELLIPSIS_LEAD.match(text) or _LEADING_VERB.match(text):
+    def _coref_or_ellipsis(self, cand: Candidate, text: str, self_key: str) -> bool:
+        """Endpoint-scoped coref: escalate iff the candidate's OWN endpoints are
+        unresolvable — a pronoun endpoint, or no grounded subject on a clause that
+        leads like a subject-dropped continuation. A pronoun elsewhere in the
+        sentence is conversational filler, not a resolution problem."""
+        for endpoint in (_cand_subject_name(cand), _cand_object_name(cand)):
+            if _norm(endpoint) in _ENDPOINT_PRONOUNS:
+                return True
+        subject_key = _norm(_cand_subject_name(cand))
+        grounded = (
+            getattr(cand, "subject_span", None) is not None
+            or (bool(subject_key) and subject_key == self_key)
+        )
+        if not grounded and text and (_ELLIPSIS_LEAD.match(text) or _LEADING_VERB.match(text)):
             return True
         return False
 

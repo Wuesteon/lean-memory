@@ -1,5 +1,18 @@
 # Calibration runs — escalation & granularity (launch gate)
 
+## post-Task-4 goldset check (endpoint-scoped coref/ellipsis)
+
+- Command: `bench/bet2_ablation.py` (offline arm — no Ollama; refuses a BET-2
+  verdict by design, plumbing/invariants only).
+- Escalation rate on the frozen goldset: **10.1%** Wilson95% [5.2%, 18.7%]
+  (gate: < 20% — PASS). router by_reason: `{'prior_entity': 2, 'derives': 6,
+  'coreference': 1}`.
+- Unchanged from the pre-fix goldset rate (10.1%): the goldset's predicate
+  sentences are already grounded with non-pronoun endpoints, so narrowing the
+  whole-text pronoun scan to endpoint-level signals cannot escalate fewer of
+  them. The heuristic change targets the *conversational* 65.6% coref floor
+  (see 2026-07 baseline below), which the goldset does not exercise.
+
 ## 2026-07 baseline (pre-fix)
 
 - Probe: `phase2_escalation_probe.py --slice ku --namespaces 5 --turns-per-ns 40`
