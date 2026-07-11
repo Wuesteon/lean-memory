@@ -129,7 +129,36 @@ population that flips in when either threshold rises to 0.5, driving 14.6% → 4
   confidence below 0.4).
 - Re-frozen: `DEFAULT_TYPING_THRESHOLD = 0.4` (gliner_extractor), router default
   `conf_threshold = 0.4`, `FROZEN_CONF_THRESHOLD = 0.4` + `FROZEN_TYPING_THRESHOLD = 0.4`
-  (bet2_goldset). The BET-2 three-gate revalidation (Step 5, `--real`) is run separately.
+  (bet2_goldset). The BET-2 three-gate revalidation (Step 5, `--real`) is recorded below.
+
+## Task 6 — BET-2 three-gate revalidation at the frozen (0.4, 0.4) operating point
+
+- Command: `bench/bet2_ablation.py --real --decodes 3` (real SentenceTransformer embedder
+  + local Ollama qwen2.5:3b, 3 decodes). Full output: `2026-07-bet2-revalidation.txt`.
+- Validates the frozen operating point (`FROZEN_CONF_THRESHOLD = 0.4`,
+  `FROZEN_TYPING_THRESHOLD = 0.4`) after the coref (Task 4) + prior_entity-drop (Task 6)
+  router changes. Verbatim verdict block:
+
+```
+  [gate 1] direct-bucket paired F1 delta = -0.4pp  95%CI [-1.2,+0.0]pp  (gate: upper ≤ 3.0pp)
+  [gate 2] escalation rate = 7.6%  Wilson95% [3.5%,15.6%]  (gate: < 20%)
+
+  gate 1 (delta upper ≤ 3.0pp): PASS
+  gate 2 (escalation upper < 20%): PASS
+  gate 3 (hybrid derives-recall 0.20 ≥ 100%-LLM 0.20 − 0.10): PASS
+
+  BET-2: PASS  (both gates required jointly; never read either alone)
+```
+
+- **All three gates PASS → BET-2: PASS.** Gate 1 (the recall guard on the enlarged
+  `direct` bucket, which now includes the ex-`prior_entity` candidates) is a −0.4pp delta
+  with upper CI +0.0pp — de-escalating those candidates did not cut quality. Gate 2 on the
+  goldset is 7.6% (well under 20%). Gate 3 (hybrid derives-recall ≥ 100%-LLM − 0.10) holds
+  at 0.20 vs 0.20.
+- Metric B (resolver, separate audit): macro-F1 **0.897** on both arms (unchanged; the
+  router change touches only the typer/direct path). 3 pre-existing route-mismatch notes on
+  `ambiguous_default` supersede cases (`res-supersede-001/003/004`) — not introduced by
+  Task 6.
 
 ## 2026-07 baseline (pre-fix)
 
