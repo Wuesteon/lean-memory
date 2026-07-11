@@ -74,6 +74,28 @@ router `by_reason` facts from this sweep constrain that work:
   *conversational* 57% object-remention floor, which the goldset does not exercise —
   the same shape as the Task-4 coref fix.
 
+## post-Step-0b goldset check (prior_entity trigger retired — second Task 6 scope amendment)
+
+- Change: `prior_entity` dropped as an escalation trigger entirely
+  (`_references_prior_entity` deleted; trigger #3 removed from `_reasons`;
+  `REASON_PRIOR_ENTITY` kept with a deprecation comment; `known_entities`/`self_entity`
+  params retained for API + typer context, no longer consulted for escalation).
+  Motivation: the post-Step-0 real-turn sweep (`2026-07-escalation-postfix.json`,
+  8 namespaces / 192 turns / 704 candidates) measured subject-only `prior_entity` still
+  at 52.8% (372/704) — subject re-mention is normal discourse in real dialogs, not a
+  rare hard case. Floor decomposition at (0.3, 0.3): prior_entity 372, derives 102,
+  coreference 1, zero low-confidence → <20% unreachable with the trigger, ≈14.6% without.
+  Entity linking is deterministic by name; ambiguous refs still escalate via coref,
+  inferential edges via derives. Third strike for this signal (73.7% BET-2 false-escalation
+  bug → self-exemption → subject-only → removed).
+- Command: `bench/bet2_ablation.py` (offline arm — plumbing/invariants only).
+- Escalation rate on the frozen goldset: **7.6%** Wilson95% [3.5%, 15.6%]
+  (gate: < 20% — PASS). router by_reason: `{'derives': 6, 'coreference': 1}`.
+- Down from the post-Step-0 goldset rate (10.1%): the goldset's 2 subject-endpoint
+  `prior_entity` escalations are now routed direct, so the rate falls by exactly those
+  2 candidates. Quality of that de-escalation is proved on `--real` by gate 1 (the
+  direct-bucket F1 delta now includes the ex-`prior_entity` candidates).
+
 ## 2026-07 baseline (pre-fix)
 
 - Probe: `phase2_escalation_probe.py --slice ku --namespaces 5 --turns-per-ns 40`

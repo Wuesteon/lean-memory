@@ -35,12 +35,18 @@ def _cand(
     )
 
 
-class TestSelfEntityExemption:
-    """The self-entity ("user") must NOT trigger prior_entity escalation."""
+class TestPriorEntityRetired:
+    """Task 6 Step 0b (scope amendment, user-approved 2026-07-11): `prior_entity`
+    is no longer an escalation trigger. Subject re-mention was 52.8% of real
+    candidates (372/704, 2026-07 postfix sweep) — normal discourse, not a hard
+    case. Entity linking is deterministic by name; genuinely ambiguous references
+    still escalate via coref, inferential edges via derives. These tests pin the
+    new contract: a candidate whose ONLY escalation signal was a known-entity
+    endpoint now routes DIRECT, and `prior_entity` never appears in `by_reason`."""
 
-    def test_first_person_facts_not_escalated_by_prior_entity(self) -> None:
-        """Core BET-2 regression: first-person facts about "user" route direct
-        even when "user" is in known_entities from prior turns."""
+    def test_first_person_facts_route_direct(self) -> None:
+        """First-person facts about "user" route direct even when "user" is in
+        known_entities — high-confidence, no coref, known predicates."""
         router = RecallBiasedRouter(conf_threshold=0.5)
         candidates = [
             _cand("user", "works_at", "Acme", "I work at Acme."),
@@ -49,22 +55,11 @@ class TestSelfEntityExemption:
             _cand("user", "uses", "Python", "I use Python."),
             _cand("user", "has", "dog", "I have a dog."),
         ]
-        # "user" is in known_entities — simulates a second+ turn
         to_type, direct = router.route(
-            candidates,
-            known_entities=["user"],
-            self_entity="user",
+            candidates, known_entities=["user"], self_entity="user",
         )
-        # None should escalate on prior_entity; all are high-confidence, no coref, known predicates
-        prior_entity_reasons = [
-            r
-            for r in router.last_stats["by_reason"]
-            if r == REASON_PRIOR_ENTITY
-        ]
-        assert not prior_entity_reasons, (
-            f"prior_entity escalated {router.last_stats['by_reason'].get(REASON_PRIOR_ENTITY, 0)} "
-            f"first-person candidates — self_entity exemption is broken"
-        )
+        assert direct == candidates
+        assert REASON_PRIOR_ENTITY not in router.last_stats["by_reason"]
 
     def test_escalation_rate_under_gate_on_first_person_episode(self) -> None:
         """Escalation rate must stay <20% for a realistic first-person episode
@@ -84,32 +79,43 @@ class TestSelfEntityExemption:
             f"on a pure first-person explicit episode"
         )
 
-    def test_third_party_entity_still_escalates(self) -> None:
-        """A fact referencing a PRIOR third-party entity (not "user") must still escalate."""
+    def test_known_third_party_subject_routes_direct(self) -> None:
+        """CONTRACT UPDATE (Step 0b): re-mentioning a prior third-party entity as
+        the subject is normal discourse. "Sam works at Globex" (Sam known, explicit
+        predicate, no coref) now routes DIRECT — was `prior_entity` escalation."""
         router = RecallBiasedRouter(conf_threshold=0.5)
-        # "Sam" is a prior entity; a fact about Sam referencing a prior entity should escalate
         cand = _cand("Sam", "works_at", "Globex", "Sam works at Globex.")
         to_type, direct = router.route(
-            [cand],
-            known_entities=["Sam", "user"],
-            self_entity="user",
+            [cand], known_entities=["Sam", "user"], self_entity="user",
         )
-        assert cand in to_type, (
-            "A fact about a prior third-party entity ('Sam') should escalate via prior_entity"
-        )
+        assert cand in direct
+        assert REASON_PRIOR_ENTITY not in router.last_stats["by_reason"]
 
-    def test_self_entity_none_restores_original_behaviour(self) -> None:
-        """With self_entity=None the exemption is disabled — "user" escalates again."""
+    def test_self_entity_none_no_longer_escalates_on_known(self) -> None:
+        """CONTRACT UPDATE (Step 0b): with the trigger removed, `known_entities`
+        membership never escalates regardless of `self_entity`. "user" as a known
+        subject with an explicit predicate routes direct even with self_entity=None."""
         router = RecallBiasedRouter(conf_threshold=0.5)
         cand = _cand("user", "works_at", "Acme", "I work at Acme.")
         to_type, direct = router.route(
-            [cand],
-            known_entities=["user"],
-            self_entity=None,
+            [cand], known_entities=["user"], self_entity=None,
         )
-        assert cand in to_type, (
-            "With self_entity=None the prior_entity trigger should fire on 'user'"
-        )
+        assert cand in direct
+        assert REASON_PRIOR_ENTITY not in router.last_stats["by_reason"]
+
+    def test_by_reason_never_contains_prior_entity(self) -> None:
+        """The retired trigger must never appear in `by_reason` for any input,
+        including candidates that would have fired it under every prior contract
+        (known subject AND known object, non-self, not introduced here)."""
+        router = RecallBiasedRouter(conf_threshold=0.5)
+        candidates = [
+            _cand("Sam", "works_at", "Globex", "Sam works at Globex."),   # known subject
+            _cand("user", "knows", "Sam", "I know Sam."),                  # known object
+            _cand("Sam", "lives_in", "Berlin", "Sam lives in Berlin."),   # both prior
+        ]
+        router.route(candidates, known_entities=["Sam", "Berlin", "Globex", "user"],
+                     self_entity="user")
+        assert REASON_PRIOR_ENTITY not in router.last_stats["by_reason"]
 
 
 class TestKnownPredicatesExpanded:
@@ -221,17 +227,18 @@ def test_first_person_self_entity_not_coref():
     assert cand in direct
 
 
-# ── Task 6 Step 0: subject-only prior_entity (scope amendment, user-approved) ──
-# `prior_entity` measured at 57% of real candidates (2026-07 sweep), confidence-
-# independent, because the OLD contract escalated on either endpoint. Re-mentioning
-# a known entity as the OBJECT is normal discourse; only a non-self entity as the
-# candidate's SUBJECT is a genuine cross-turn edge. Object endpoint dropped from the
-# check; self-exemption and `introduced_here` logic unchanged.
+# ── Task 6 Step 0b: prior_entity retired as a trigger (scope amendment) ──
+# Step 0 first narrowed prior_entity to the subject endpoint; the postfix sweep
+# then measured subject-only prior_entity still at 52.8% of real candidates
+# (372/704) — normal discourse in real dialogs, not a rare hard case. Step 0b
+# drops the trigger entirely (entity linking is deterministic by name; ambiguous
+# refs escalate via coref, inferential edges via derives). Both endpoint mentions
+# of a known entity now route direct on the other signals.
 
 
 def test_object_remention_of_known_entity_routes_direct():
-    """Re-mentioning a known entity as the OBJECT is normal discourse, not a
-    cross-turn edge — measured at 57% of real candidates (2026-07 sweep)."""
+    """Re-mentioning a known entity as the OBJECT is normal discourse — routes
+    direct, never `prior_entity`."""
     r = RecallBiasedRouter(conf_threshold=0.3)
     cand = _grounded_cand(subject="user", obj="Acme", text="I visited Acme again today.",
                           predicate="works_at", subject_span=None)
@@ -240,11 +247,14 @@ def test_object_remention_of_known_entity_routes_direct():
     assert r.last_stats["by_reason"].get("prior_entity", 0) == 0
 
 
-def test_prior_subject_still_escalates():
-    """A non-self subject seen in a PRIOR turn is a genuine cross-turn edge."""
+def test_known_subject_remention_routes_direct():
+    """CONTRACT UPDATE (Step 0b): a non-self subject seen in a PRIOR turn is
+    normal discourse — entity linking is deterministic by name, so a grounded,
+    explicit, high-confidence candidate routes direct even when its subject is
+    already known. (Was `prior_entity` escalation under Step 0's subject-only rule.)"""
     r = RecallBiasedRouter(conf_threshold=0.3)
     cand = _grounded_cand(subject="Acme", obj="Berlin", predicate="located_in",
                           text="Acme is located in Berlin.")
-    to_type, _ = r.route([cand], known_entities={"Acme"})
-    assert cand in to_type
-    assert r.last_stats["by_reason"]["prior_entity"] == 1
+    to_type, direct = r.route([cand], known_entities={"Acme"})
+    assert cand in direct
+    assert r.last_stats["by_reason"].get("prior_entity", 0) == 0

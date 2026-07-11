@@ -10,10 +10,16 @@ cross-turn edges are exactly the residual the LLM must own).
 A candidate is ESCALATED to the Pass-4 LLM-typing batch if ANY of:
   1. GLiNER2 confidence below `conf_threshold`          — the parser is unsure;
   2. coreference / ellipsis / zero-pronoun detected      — the span isn't self-contained;
-  3. it references a *previously-seen* entity that was    — cross-turn / cross-session edges
-     NOT introduced in this episode (`known_entities`)      are where deterministic isolation fails;
-  4. it is a possible `derives` (inferential) edge        — only the LLM may emit `is_inference=1`.
+  3. it is a possible `derives` (inferential) edge        — only the LLM may emit `is_inference=1`.
 Everything else is routed `direct` (skips the LLM) and gets the cheap `asserts`/slot path.
+
+RETIRED (Task 6, 2026-07): a former criterion escalated any candidate touching a
+*previously-seen* entity (`known_entities`). It fired on 52.8% of real conversational
+candidates (subject re-mention is normal discourse, not a hard cross-turn case) and was
+the last confidence-independent floor over the <20% gate. Entity linking is deterministic
+by name (`upsert_entity`); genuinely ambiguous references still escalate via coref, and
+inferential edges via derives. `known_entities` is still accepted (the typer uses the
+names as context) but no longer drives escalation.
 
 WHY this is its own deterministic pass (no model): the router IS the cost story. The
 spec gates the whole BET-2 design on escalation rate staying < 20%; if it trends to
@@ -42,6 +48,11 @@ from .taxonomy import Candidate
 # ── escalation reason codes (stable strings → cheap to assert on / aggregate) ──
 REASON_LOW_CONF = "low_confidence"
 REASON_COREF = "coreference"
+# DEPRECATED (Task 6, 2026-07): `prior_entity` was retired as an escalation trigger
+# (subject re-mention fired on 52.8% of real candidates — normal discourse, not a hard
+# case; entity linking is deterministic by name, ambiguous refs escalate via coref).
+# The constant is kept because historical probe/telemetry JSONs reference the string;
+# the router never emits it anymore. See _reasons() and the calibration README.
 REASON_PRIOR_ENTITY = "prior_entity"
 REASON_DERIVES = "derives"
 REASON_PRE_FLAGGED = "pre_flagged"  # Pass-2 `needs_typing` already requested typing
@@ -259,13 +270,14 @@ class RecallBiasedRouter:
         `direct`   → skip the LLM; cheap deterministic `asserts`/slot path.
 
         `known_entities` is the set of entity names already seen in PRIOR turns/sessions
-        of this namespace (cross-turn edges live here — the spot deterministic isolation
-        fails). It is read-only; the caller owns growing it after the episode is typed.
+        of this namespace. As of Task 6 (2026-07) it NO LONGER drives escalation — the
+        `prior_entity` trigger was retired (it fired on 52.8% of real candidates without
+        recall benefit; entity linking is deterministic by name). The parameter is kept
+        for API stability and because the Pass-4 typer uses these names as context.
 
         `self_entity` is the namespace-owner / first-person persona name (default "user").
-        It is always in `known_entities` after the first turn, but it is NOT a cross-turn
-        escalation signal — first-person facts about it are trivially resolvable without
-        the LLM. Passing None disables this exemption.
+        It was the exemption for the retired `prior_entity` trigger and is likewise no
+        longer consulted for escalation; kept for API stability.
         """
         known = {_norm(e) for e in known_entities} if known_entities else set()
         self_key = _norm(self_entity) if self_entity else ""
@@ -345,13 +357,15 @@ class RecallBiasedRouter:
         if self._coref_or_ellipsis(cand, text, self_key):
             reasons.append(REASON_COREF)
 
-        # 3. References a prior-turn/session entity not introduced in this episode.
-        if self._references_prior_entity(cand, known, self_key):
-            reasons.append(REASON_PRIOR_ENTITY)
-
-        # 4. Possible `derives` (inferential) edge — LLM-only relation.
+        # 3. Possible `derives` (inferential) edge — LLM-only relation.
         if self._is_possible_derives(cand, text):
             reasons.append(REASON_DERIVES)
+
+        # NOTE (Task 6, 2026-07): a former criterion here escalated any candidate
+        # touching a `known_entities` member. Retired — it fired on 52.8% of real
+        # candidates (subject re-mention is normal discourse) and blocked the <20%
+        # gate. `known` / `self_key` are still threaded through for API stability but
+        # no longer consulted. See REASON_PRIOR_ENTITY (deprecated) and the docstring.
 
         return reasons
 
@@ -372,45 +386,14 @@ class RecallBiasedRouter:
             return True
         return False
 
-    def _references_prior_entity(
-        self, cand: Candidate, known: set[str], self_key: str = ""
-    ) -> bool:
-        """True iff the candidate's SUBJECT is a non-self entity SEEN BEFORE but not
-        introduced here — a hard cross-turn edge the LLM must own.
-
-        SUBJECT-only (Task 6, scope amendment 2026-07-10): checking BOTH endpoints put
-        `prior_entity` at 57% of real candidates (181/316 at gliner 0.5, 2026-07 sweep),
-        confidence-independent, so no threshold pair could reach the <20% gate. Re-mentioning
-        a known entity as the OBJECT ("I visited Acme again") is normal discourse and routes
-        on the other signals; only a previously-seen non-self entity appearing as the fact's
-        SUBJECT (a third party the fact is about) is a genuine cross-turn edge.
-
-        If Pass 2 told us which names were introduced in this episode (`introduced_here`),
-        the subject counts as "prior" only when it's in `known` AND not in that introduced
-        set. Without that hint we fall back to plain `known` membership — still recall-biased.
-
-        `self_key` (normalised) is the namespace-owner / first-person persona. It is
-        always in `known` after the first turn, but it is NOT a cross-turn signal —
-        first-person facts are trivially resolvable without the LLM. We skip it here so
-        the 13-of-19 false escalations that drove gate-2 to 73.7% are eliminated.
-        """
-        if not known:
-            return False
-        introduced = _cand_introduced_here(cand)
-        introduced_norm = {_norm(x) for x in introduced} if introduced is not None else None
-
-        key = _norm(_cand_subject_name(cand))
-        if not key or key not in known:
-            return False
-        # The self-entity (namespace owner / "user") is omnipresent across turns but
-        # is never a genuine cross-turn reference — skip it.
-        if self_key and key == self_key:
-            return False
-        if introduced_norm is not None and key in introduced_norm:
-            # Re-mentioned an entity that this very episode introduced ⇒ intra-episode,
-            # deterministically resolvable ⇒ not a cross-turn escalation.
-            return False
-        return True
+    # NOTE (Task 6, 2026-07): `_references_prior_entity` was deleted here. It escalated
+    # any candidate whose subject was a previously-seen entity; on real dialogs subject
+    # re-mention is normal discourse (52.8% of candidates), so it blocked the <20% gate
+    # with no recall benefit (entity linking is deterministic by name). Ambiguous
+    # references still escalate via `_coref_or_ellipsis`, inferential edges via
+    # `_is_possible_derives`. `_cand_introduced_here` is now unused by the router but
+    # kept as a public helper; `known_entities` remains a `route()` parameter for the
+    # typer's context (see route()'s docstring).
 
     @staticmethod
     def _is_possible_derives(cand: Candidate, text: str) -> bool:
