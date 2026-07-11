@@ -1,45 +1,42 @@
 # CLAUDE.md
 
-<!-- ═══════════════════════════════════════════════════════════════════
-     TEMPORARY NOTE — Phase 2 pickup. DELETE THIS ENTIRE BLOCK once the
-     engine-fix backlog below is done and the Phase 2 slices have been
-     re-run (i.e. result files exist in bench/results/phase2/).
-     ═══════════════════════════════════════════════════════════════════ -->
+## ⚠️ START HERE: strategy is quality-gate → MCP launch (2026-07-08)
 
-## ⚠️ START HERE: Phase 2 is suspended mid-flight (2026-07-03)
+Approved direction: **close a small, hard quality gate on the first-run
+experience, then launch across MCP channels** (Pure A). Read before any work:
 
-Before any work on benchmarks, extraction, or retrieval, read:
+1. **`docs/superpowers/specs/2026-07-08-strategic-direction-design.md`** — the
+   approved strategy (positioning, the six-item quality gate, launch plan, the
+   six-week post-launch demand read). Non-negotiable context; do not re-derive.
+2. **`docs/superpowers/plans/2026-07-08-launch-quality-gate.md`** — the ordered
+   implementation plan that executes the gate.
 
-1. **`docs/phase2-learnings.md`** — what we assumed, what broke, what was
-   fixed, with measured numbers. Non-negotiable context; do not re-derive.
-2. **`docs/superpowers/phase2-HANDOFF.md`** — operational runbook (exact
-   commands, cache layout, HF Space handling) + the engine-fix backlog.
+State: the former "Phase 2 suspended, fix engine then re-run benchmarks" framing
+is **superseded**. Engine-fix backlog items 1–3 are **FIXED** on `launch-gate`
+(numbers are the source of truth in `bench/results/calibration/README.md`):
 
-State: the Phase 2 benchmark harness (`bench/phase2_*.py`) is COMPLETE and
-tested (91 green) on branch `phase2-eval-harness`. The benchmark runs were
-deliberately stopped: ingest surfaced engine flaws (97% LLM-escalation rate on
-conversational data being the big one) that make any score obsolete-on-arrival.
-Fix the engine first, then re-run — the harness needs no changes.
+- **Escalation recalibration** — endpoint-scoped coref + `prior_entity` trigger
+  dropped (two user-approved amendments); real-turn escalation **95.9% → 14.6%**
+  at the frozen `(typing=0.4, conf=0.4)` operating point; goldset **10.1% → 7.6%**.
+  BET-2 revalidation PASSES all three gates.
+- **Extraction granularity** — GLiNER `DEFAULT_THRESHOLD` 0.1 → 0.4;
+  **8.43 → 3.67 facts/turn**.
+- **Recency anchoring** — `Memory.search(now=...)` forwards search-time now
+  (wall-clock default unchanged).
 
-**Next steps, in order:**
-1. Recalibrate escalation: offline StubTyper probe of escalation vs.
-   (`typing_threshold`, `conf_threshold`) on real LongMemEval turns → pick an
-   operating point <20% → validate with `bench/bet2_ablation.py --sweep --real`
-   and its three gates → re-freeze constants in `bench/bet2_goldset.py`.
-2. Decide extraction granularity (fact_text ≈ full utterances today, ~8
-   facts/turn) — calibrate the GLiNER threshold alongside step 1.
-3. Fix recency anchoring (`Memory.search` should forward `now`, or anchor decay
-   to corpus time — the recency term is dead on historical data).
-4. Re-run Phase 2: KU slice then LoCoMo temporal (commands in the handoff doc;
-   the paused HF Space `wuesteon1337/lm-typer-phase2` can be resumed, or use
-   any CUDA box — the typer model digest is pinned in the manifests).
-5. Housekeeping: rotate the OpenRouter key and HF token
-   (`bench/.phase2_cache/*.key|*.token` — both passed through a chat session);
-   merge or PR the `phase2-eval-harness` branch after a final whole-branch
-   review (superpowers flow, ledger of deferred minors in
-   `.superpowers/sdd/progress.md`).
+**Benchmark runs (LongMemEval/LoCoMo) are DEFERRED past the MCP launch** per the
+spec — they are a post-launch credibility layer, not the critical path. The
+harness (`bench/phase2_*.py`) is complete and needs no changes for the eventual
+re-run.
 
-<!-- ═══════════════ END TEMPORARY NOTE (delete to here) ═══════════════ -->
+**Remaining next steps = launch execution** per spec §3 (MCP Registry listing,
+`awesome-mcp-servers` PR, Claude Code plugin marketplace, PyPI polish, Show HN,
+subreddit posts); security housekeeping (rotate the OpenRouter key + HF token,
+merge the harness branch) is gate item 5.
+
+Historical context (dated, do not re-derive): `docs/phase2-learnings.md`
+(assumptions vs. reality postmortem) and `docs/superpowers/phase2-HANDOFF.md`
+(operational runbook + the now-fixed engine-fix backlog).
 
 ## Project
 

@@ -27,11 +27,11 @@ Implementation status, design decisions, benchmark results, and known limitation
 |---|---|---|
 | Relation taxonomy | ✅ | `asserts`/`supersedes`/`extends`/`derives`; single shared `Candidate` contract |
 | Pass 2 — candidate generation | ✅ | `StubCandidateGenerator` (offline) / `Gliner2Generator` (GLiNER2, `[extract]` extra) |
-| Pass 3 — recall-biased router | ✅ | escalates low-conf / coref / cross-turn / possible-`derives`; `self_entity` exemption prevents false-escalation of first-person facts |
+| Pass 3 — recall-biased router | ✅ | escalates low-conf / endpoint-scoped coref / possible-`derives` (2026-07 re-freeze: `prior_entity` trigger dropped — see "Escalation recalibration") |
 | Pass 4 — LLM constrained typing | ✅ | `StubTyper` (offline) / `OllamaTyper` (local model, `[llm]` extra) |
 | Contradiction → supersession | ✅ | cheap-then-escalate: slot → cosine → subsumption → LLM |
 | Salience at write | ✅ | deterministic heuristic, rated once + cached on the `Fact` |
-| BET-2 ablation harness | ✅ | `bench/bet2_ablation.py` — **BET-2 PASS** (2026-06-21, n=97, 0.0pp delta, 10.1% escalation) |
+| BET-2 ablation harness | ✅ | `bench/bet2_ablation.py` — **BET-2 PASS**; re-frozen 2026-07 at `(typing=0.4, conf=0.4)` (−0.4pp delta, 7.6% escalation), superseding the 2026-06-21 freeze — see "Escalation recalibration (2026-07)" below |
 
 ### Phase 1 — Integrations
 
@@ -44,7 +44,7 @@ Implementation status, design decisions, benchmark results, and known limitation
 
 | Item | Status |
 |---|---|
-| Public benchmarks (LongMemEval / LoCoMo + frozen judge) | ⬜ |
+| Public benchmarks (LongMemEval / LoCoMo + frozen judge) | ⬜ deferred (post-launch) — harness complete, see `docs/superpowers/specs/2026-07-08-strategic-direction-design.md` |
 | int8 vector storage | ⬜ blocked — sqlite-vec 0.1.9 insert path is broken upstream |
 | `LanceStore` scale tier | ⬜ |
 
@@ -65,6 +65,11 @@ The pluggable-backend architecture is validated. These are sanity checks on smal
 Note: `google/embeddinggemma-300m` is a gated HF repo requiring license-accept. `Qwen3-Embedding-0.6B` is ungated and the stronger retrieval model (MTEB-R 64.65 vs 62.49) — use it instead.
 
 ### Extraction Quality — BET-2 (2026-06-21, n=97)
+
+> **Superseded by the 2026-07 re-freeze** at operating point
+> `(typing=0.4, conf=0.4)` — see "Escalation recalibration (2026-07)" below.
+> The 2026-06-21 run below stays as the original PASS record; the frozen
+> constants and escalation rate quoted here (`conf 0.5`-era, 10.1%) are historical.
 
 **Metric A — Typer (`asserts` vs `derives`):**
 
@@ -89,6 +94,57 @@ Note: `google/embeddinggemma-300m` is a gated HF repo requiring license-accept. 
 
 **BET-2 = PASS** (goldset sha256 `350b18b51a97fe57`).
 
+### Escalation recalibration (2026-07)
+
+The Phase 2 ingest surfaced that BET-2's <20% escalation gate held only on clean
+goldset sentences: on **real LongMemEval conversational turns** the router routed
+**95.9%** of candidates to the LLM (baseline probe, `bench/results/calibration/2026-07-escalation-baseline.json`;
+best point typing=conf=0.3, 971/1012). Two confidence-independent router floors
+drove it — `coreference` 65.6% and `prior_entity` 54.8% — so no threshold pair
+could reach the target. Both were retired at the router:
+
+- **Endpoint-scoped coref/ellipsis** — the pronoun/demonstrative scan narrowed
+  from the whole `fact_text` to the predicate endpoints. On real turns
+  `coreference` collapsed **664 → 1** (`2026-07-granularity-sweep.json`).
+- **`prior_entity` trigger dropped** (two user-approved amendments: subject-only,
+  then removed entirely) — subject re-mention of a known entity is normal
+  discourse, not a hard case, and it stayed at 52.8% of real candidates even
+  scoped to the subject (`2026-07-escalation-postfix.json`). Entity linking is
+  deterministic by name; ambiguous refs still escalate via `coreference`,
+  inferential edges via `derives`.
+
+Post-drop probe on real turns (8 namespaces / 192 turns / 704 candidates,
+`2026-07-escalation-postdrop-p{1..4}.json`) selected the operating point:
+
+| typing | conf | escalated/seen | rate | by_reason |
+|---:|---:|---:|---:|---|
+| **0.40** | **0.40** | **103/704** | **14.6%** | derives 102, coref 1 |
+| 0.50 | 0.50 | 316/704 | 44.9% | pre_flagged 247, low_conf 247, derives 102, coref 1 |
+
+Only `(0.4, 0.4)` clears the margin (raising either threshold to 0.5 pulls in the
+247 candidates with model confidence in [0.4, 0.5)); the residual is
+derives-dominated (the irreducible inferential edges the LLM must own).
+
+**Granularity** (`2026-07-granularity-sweep.json`): GLiNER `DEFAULT_THRESHOLD`
+0.1 → 0.4 cut over-generation **8.43 → 3.67 facts/turn** (decision rule: smallest
+swept threshold meeting facts/turn ≤ 4). The `median_fact_len ≤ 160` target was
+waived (user-approved) as threshold-insensitive — it sits at 171–187 chars across
+the entire sweep, so no GLiNER threshold moves it.
+
+**Re-frozen constants:** `DEFAULT_TYPING_THRESHOLD = 0.4`, router
+`conf_threshold = 0.4`, `FROZEN_CONF_THRESHOLD = FROZEN_TYPING_THRESHOLD = 0.4`
+(`bench/bet2_goldset.py`). **BET-2 three-gate revalidation at the frozen point
+(`bench/bet2_ablation.py --real`, full output `2026-07-bet2-revalidation.txt`):**
+
+| Gate | Target | Result | Verdict |
+|---|---|---|---|
+| 1 — direct-bucket paired F1 delta | upper ≤ 3.0pp | −0.4pp [−1.2, +0.0]pp | ✅ PASS |
+| 2 — escalation rate (goldset, Wilson upper) | < 20% | 7.6% [3.5%, 15.6%] | ✅ PASS |
+| 3 — hybrid derives-recall not worse | ≥ LLM − 10pp | 0.20 ≥ 0.10 | ✅ PASS |
+
+**BET-2 re-freeze = PASS** (all three gates jointly). Metric B resolver macro-F1
+unchanged at **0.897** (the router change touches only the typer/direct path).
+
 ---
 
 ## Bugs Found by the Benchmark
@@ -100,7 +156,7 @@ The measurement process found 4 real engine bugs before they shipped.
 | 1 | **`extends` unreachable** — every non-identical object mapped to `supersedes` | Additive signal routing: additive cues ("also", multi-valued predicates) → `extends`; functional slots still supersede |
 | 2 | **Resolver thresholds miscalibrated** — `HIGH=0.82`/`LOW=0.55` put Qwen3 refinements in the wrong band | Recalibrated to `HIGH=0.80`/`LOW=0.45`; verified 4/4 on real Qwen3 |
 | 3 | **`OllamaTyper` label-set mismatch** — offering all 4 relations to a typer with no prior-slot context caused qwen2.5:3b to anchor on `extends` for everything | Constrained to `{asserts, derives}` |
-| 4 | **Router `prior_entity` over-escalation** — "user" always in `known_entities` after turn 1, causing 73.7% false escalation | `self_entity` exemption in `_references_prior_entity()`; expanded `_KNOWN_PREDICATES`; gold set rebalanced 37→97 cases |
+| 4 | **Router `prior_entity` over-escalation** — "user" always in `known_entities` after turn 1, causing 73.7% false escalation | `self_entity` exemption in `_references_prior_entity()`; expanded `_KNOWN_PREDICATES`; gold set rebalanced 37→97 cases — **superseded 2026-07:** the `prior_entity` trigger was dropped entirely after real-turn data showed it still fired on 52.8% of candidates (see "Escalation recalibration (2026-07)") |
 
 ---
 
@@ -126,7 +182,8 @@ Each namespace (e.g. per-user) gets its own SQLite file rather than a shared dat
 
 ## Known Limitations
 
-- **No benchmark-grade quality claim.** All numbers are on small hand-built sets. A real claim needs LongMemEval/LoCoMo + a frozen judge (Phase 2).
+- **No benchmark-grade quality claim.** All numbers are on small hand-built sets. A real claim needs LongMemEval/LoCoMo + a frozen judge (Phase 2, deferred post-launch).
+- **Recency on historical corpora — addressed (2026-07).** `exp(-λ·age)` collapses to ~0 for every fact when historical data is read years later, so the 0.2 recency term was dead weight on such corpora. `Memory.search(now=...)` now forwards an explicit search-time anchor so callers evaluating historical data can restore the recency signal; the wall-clock default is unchanged for live use.
 - **Vectors stored float32, not int8.** sqlite-vec 0.1.9's int8 insert path is broken upstream. Flip when fixed (~0.2pt quality cost per BET-1, no correctness impact).
 - **Small-model ceiling.** qwen2.5:3b caps Typer accuracy. A larger local model would likely lift derives-recall. Untested.
 - **Single machine, single run** for all real numbers. Reproducible, but not multi-seed/multi-judge as the spec's BET-5 demands.

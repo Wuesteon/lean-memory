@@ -10,6 +10,12 @@
 > **Next phase: fix the exposed engine flaws first (backlog below), re-freeze,
 > then re-run the slices** — the harness (Tasks 1–12) is done and stands ready.
 
+> **UPDATE (2026-07-08+):** backlog items 1–3 fixed on `launch-gate`
+> (endpoint-scoped coref, granularity + escalation re-freeze, search-time `now`).
+> Benchmark re-runs are DEFERRED past the MCP launch per
+> `docs/superpowers/specs/2026-07-08-strategic-direction-design.md`. Secrets
+> rotated. The runbook below remains valid for the eventual re-run.
+
 ## Engine-fix backlog (from benchmark findings, in priority order)
 
 1. **Escalation calibration** — both confidence gates (generator
