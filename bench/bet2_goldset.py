@@ -53,7 +53,8 @@ Relation = Literal["asserts", "supersedes", "extends", "derives"]
 #: 0.6–0.95): HIGH catches refinements, LOW marks unrelated values. See contradiction.py.
 FROZEN_HIGH_SIM = 0.80
 FROZEN_LOW_SIM = 0.45
-FROZEN_CONF_THRESHOLD = 0.5
+FROZEN_CONF_THRESHOLD = 0.4   # re-frozen 2026-07: endpoint-scoped coref + prior_entity drop + real-turn probe
+FROZEN_TYPING_THRESHOLD = 0.4  # frozen 2026-07 (was implicit 0.5); chosen operating point (typing=0.4, conf=0.4) → 14.6% escalation
 
 
 @dataclass(frozen=True)

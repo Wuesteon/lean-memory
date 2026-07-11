@@ -1,0 +1,59 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+==============================================================================
+BET-2 ABLATION — hybrid extraction vs 100%-LLM
+==============================================================================
+gold cases: 97  (typer=79, resolver=18)
+goldset sha256: 350b18b51a97fe57
+backends: REAL (gliner2/ollama/sentence-transformer)   thresholds: high_sim=0.8 low_sim=0.45 conf=0.4
+
+------------------------------------------------------------------------------
+METRIC A — Typer (derives-detection + coref)  [PRIMARY GATE]
+------------------------------------------------------------------------------
+  n=79  support: asserts=69, derives=10
+  100%-LLM  macro-F1=0.623 [0.463,0.791]  derives-recall=0.200  coref-acc=1.000
+  hybrid    macro-F1=0.639 [0.466,0.822]  derives-recall=0.200  coref-acc=1.000
+  DIRECT bucket (the honest gate): n=73  support: asserts=69, derives=4
+      paired F1 delta (100%-LLM − hybrid) = -0.4pp  95%CI [-1.2,+0.0]pp
+  ALL candidates (context only — dilutes toward 0): n=79  support: asserts=69, derives=10
+      paired F1 delta (100%-LLM − hybrid) = -1.6pp  95%CI [-5.7,+0.0]pp
+  ROUTING ATTRIBUTION: 4 derives gold landed in 'direct' (StubTyper can emit derives via cue, but a missed escalation is a router bug):
+      typ-derive-direct-007: gold=derives pred=asserts
+      typ-derive-direct-008: gold=derives pred=asserts
+      typ-derive-direct-009: gold=derives pred=asserts
+      typ-derive-direct-010: gold=derives pred=asserts
+  router by_reason: {'derives': 6, 'coreference': 1}
+
+  DECODE VARIANCE (--real, temp 0 is NOT batch-deterministic on qwen2.5:3b):
+    100%-LLM  macro-F1 0.623 ± 0.000 (between 3 decodes)
+    hybrid    macro-F1 0.639 ± 0.000 (between 3 decodes)
+
+Loading weights:   0%|          | 0/310 [00:00<?, ?it/s]Loading weights: 100%|██████████| 310/310 [00:00<00:00, 4364.97it/s]
+/Users/wuesteon/research/lean-memory/src/lean_memory/embed/sentence_transformer.py:52: FutureWarning: The `get_sentence_embedding_dimension` method has been renamed to `get_embedding_dimension`.
+  self.dim = self._model.get_sentence_embedding_dimension() or self.dim
+------------------------------------------------------------------------------
+METRIC B — Resolver (asserts/extends/supersedes)  [SEPARATE AUDIT]
+------------------------------------------------------------------------------
+  n=18  support: asserts=5, extends=5, supersedes=8
+  100%-LLM  macro-F1=0.897 [0.732,1.000]
+  hybrid    macro-F1=0.897 [0.732,1.000]
+  100%-LLM confusion (rows=gold, cols=pred):
+                   asserts     extends  supersedes
+    asserts              5           0           0
+    extends              0           5           0
+    supersedes           0           2           6
+  ROUTE MISMATCHES (3) — gold/engine semantic disagreement:
+      res-supersede-001: gold_route=ambiguous_default pred_route=llm
+      res-supersede-003: gold_route=ambiguous_default pred_route=mid_extends
+      res-supersede-004: gold_route=ambiguous_default pred_route=mid_extends
+
+==============================================================================
+VERDICT
+==============================================================================
+  [gate 1] direct-bucket paired F1 delta = -0.4pp  95%CI [-1.2,+0.0]pp  (gate: upper ≤ 3.0pp)
+  [gate 2] escalation rate = 7.6%  Wilson95% [3.5%,15.6%]  (gate: < 20%)
+
+  gate 1 (delta upper ≤ 3.0pp): PASS
+  gate 2 (escalation upper < 20%): PASS
+  gate 3 (hybrid derives-recall 0.20 ≥ 100%-LLM 0.20 − 0.10): PASS
+
+  BET-2: PASS  (both gates required jointly; never read either alone)

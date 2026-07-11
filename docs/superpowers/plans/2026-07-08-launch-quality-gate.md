@@ -561,6 +561,48 @@ With the coref heuristic fixed (Task 4) and granularity set (Task 5), sweep both
 **Interfaces:**
 - Consumes: enriched probe JSON (Task 5 shape).
 - Produces: the frozen constants every future BET-2/Phase-2 run reads. Selection rule for later auditors: **highest** `(typing_threshold, conf_threshold)` pair (most recall-biased) with probe `rate < 0.15` (margin under the 20% gate), tie-broken by higher `conf_threshold`.
+- Produces (Step 0): `_references_prior_entity` narrowed to the SUBJECT endpoint — reason string `"prior_entity"` unchanged.
+
+- [ ] **Step 0: Narrow `prior_entity` to the subject endpoint (scope amendment, user-approved 2026-07-10)**
+
+The Task 5 sweep measured `prior_entity` at 57% of candidates (181/316 at gliner 0.5) — confidence-independent, so no threshold pair can reach <20% without this change (same situation Task 4 fixed for coref; the calibration README documents it). Approved contract: an endpoint matching a previously-seen entity is a *hard cross-turn edge* only when it is the candidate's **subject** (a non-self third party the fact is about); re-mentioning a known entity as the **object** is normal discourse and routes on the other signals.
+
+TDD — add to `tests/test_router.py`:
+
+```python
+def test_object_remention_of_known_entity_routes_direct():
+    """Re-mentioning a known entity as the OBJECT is normal discourse, not a
+    cross-turn edge — measured at 57% of real candidates (2026-07 sweep)."""
+    r = RecallBiasedRouter(conf_threshold=0.3)
+    cand = _grounded_cand(subject="user", obj="Acme", text="I visited Acme again today.",
+                          predicate="works_at", subject_span=None)
+    to_type, direct = r.route([cand], known_entities={"Acme"})
+    assert cand in direct
+    assert r.last_stats["by_reason"].get("prior_entity", 0) == 0
+
+
+def test_prior_subject_still_escalates():
+    """A non-self subject seen in a PRIOR turn is a genuine cross-turn edge."""
+    r = RecallBiasedRouter(conf_threshold=0.3)
+    cand = _grounded_cand(subject="Acme", obj="Berlin", predicate="located_in",
+                          text="Acme is located in Berlin.")
+    to_type, _ = r.route([cand], known_entities={"Acme"})
+    assert cand in to_type
+    assert r.last_stats["by_reason"]["prior_entity"] == 1
+```
+
+(Adjust `_grounded_cand` usage to the helper's actual signature; the first test's subject is the self entity so the pre-existing self-exemption must also keep it direct.) Run them: the object-remention test FAILS on the old contract. Implement: in `_references_prior_entity` (`src/lean_memory/extract/router.py`), check ONLY `_cand_subject_name(cand)` — drop the object endpoint from the loop; keep the `introduced_here` and self-entity exemptions unchanged; update the method docstring to cite the 57% measurement. Update any pre-existing test that encoded the object-endpoint contract (contract-update only, with a comment). Then re-run the offline goldset check (`.venv/bin/python bench/bet2_ablation.py 2>&1 | tail -30`) and record the escalation rate as a "post-Step-0 goldset check" bullet in `bench/results/calibration/README.md` — it must stay <20%.
+
+- [ ] **Step 0b: Drop `prior_entity` as an escalation trigger (second scope amendment, user-approved 2026-07-10)**
+
+The post-Step-0 sweep (`2026-07-escalation-postfix.json`, 8 namespaces / 192 turns / 704 candidates) measured subject-only `prior_entity` still firing on 52.8% (372/704): subject re-mention is normal discourse in real dialogs, not a rare hard case. Floor decomposition at (0.3, 0.3): prior_entity 372, derives 102, coreference 1, zero low-confidence — so <20% is unreachable with the trigger and ≈14.6% without it. Rationale for removal: entity linking is deterministic by name (`upsert_entity`); ambiguous references escalate via coref; inferential edges via derives; supersession ambiguity has its own cheap-then-escalate resolver downstream. Third strike for this signal (73.7% false-escalation bug in BET-2, then the self-exemption, then subject-only). Quality proof is Step 5's gate 1 (F1 delta on the direct bucket now includes ex-prior_entity candidates).
+
+Implementation contract:
+- Remove trigger #3 from `_reasons` and delete `_references_prior_entity`; keep `REASON_PRIOR_ENTITY` defined with a deprecation comment (historical probe JSONs reference the string).
+- KEEP the `known_entities` parameter on `route()`/`should_escalate()` (API stability; `Memory.add` passes it and the typer uses the names as context) — docstring notes it no longer drives escalation.
+- TDD: update the prior_entity router tests to the new contract (known-subject re-mention routes direct; keep one test asserting `by_reason` never contains `prior_entity`). Contract-update only; do not weaken coref/derives/low-conf/pre_flagged tests.
+- Offline goldset check (`bench/bet2_ablation.py`, offline) — record the rate as a "post-Step-0b goldset check" bullet in the calibration README (must stay <20%).
+- Commit separately: `fix(router): drop prior_entity escalation trigger (52.8% subject-remention floor on real dialogs)`.
 
 - [ ] **Step 1: Run the post-fix sweep**
 
@@ -569,7 +611,7 @@ With the coref heuristic fixed (Task 4) and granularity set (Task 5), sweep both
   --json bench/results/calibration/2026-07-escalation-postfix.json
 ```
 (8 namespaces now — the decision run deserves a bigger sample than the baseline.)
-Expected: multiple points under 20%. If NO point is under 20%, STOP — re-read the by_reason breakdown, file the dominant reason as a new analysis bullet in `bench/results/calibration/README.md`, and raise it with the human partner before proceeding (the next lever is `prior_entity` or `derives` scoping, which is out of this plan's approved scope).
+Expected: with Step 0 landed, multiple points under 20% (residual floor ≈ derives ~13% + low-confidence at the swept gates). If NO point is under 20%, STOP — re-read the by_reason breakdown, file the dominant reason as a new analysis bullet in `bench/results/calibration/README.md`, and raise it with the human partner before proceeding (further reason-scoping beyond Step 0 remains out of approved scope).
 
 - [ ] **Step 2: Apply the operating point**
 

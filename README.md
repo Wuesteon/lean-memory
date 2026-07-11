@@ -2,15 +2,11 @@
 
 Embedded, local-first agent memory. No server, no daemon, no mandatory cloud key.
 
-> **TODO — Phase 2 benchmarking is suspended mid-flight (2026-07-03).**
-> The LongMemEval/LoCoMo harness (`bench/phase2_*.py`) is complete and tested,
-> but the runs were deliberately stopped: they exposed engine flaws (97%
-> LLM-escalation rate on conversational data, among others) that must be fixed
-> before any score is worth publishing. To finish this right: start at
-> **`CLAUDE.md`** → `docs/phase2-learnings.md` → `docs/superpowers/phase2-HANDOFF.md`
-> (fix backlog + exact re-run commands). Also pending: final whole-branch code
-> review of the merged Phase 2 work, and rotating the API keys noted in the
-> handoff. Remove this note when the result files land in `bench/results/phase2/`.
+> **Status (2026-07):** working toward the first public launch (MCP-first).
+> Roadmap and rationale: `docs/superpowers/specs/2026-07-08-strategic-direction-design.md`.
+> Public benchmark runs (LongMemEval/LoCoMo) are deferred until after launch;
+> the harness is complete (`bench/phase2_*.py`) and the engine flaws it exposed
+> are fixed on this branch — see `docs/phase2-learnings.md`.
 
 ```python
 from lean_memory import Memory
@@ -18,10 +14,12 @@ from lean_memory import Memory
 mem = Memory(root="./data")
 
 mem.add("user-42", "I work at Acme Corp.")
-mem.add("user-42", "I moved to Globex last week.")   # supersedes Acme automatically
+mem.add("user-42", "I now work at Globex.")          # supersedes Acme automatically
 
-mem.search("user-42", "where does the user work?")   # → "I moved to Globex last week."
+mem.search("user-42", "where does the user work?")   # → "I now work at Globex."
 ```
+
+![lean-memory quickstart](docs/assets/quickstart.gif)
 
 Facts are extracted from natural language, stored in a per-namespace SQLite file, and retrieved with hybrid dense+sparse search. Old facts are never deleted — they're superseded and queryable at any past point in time.
 
@@ -49,16 +47,17 @@ from lean_memory import Memory
 mem = Memory(root="./data")   # one SQLite file per namespace, stored under ./data/
 
 # Store facts in natural language
-mem.add("alice", "I'm a backend engineer at Stripe.")
-mem.add("alice", "I switched to frontend at Vercel last month.")
+mem.add("alice", "I work at Stripe.")
+mem.add("alice", "I now work at Vercel.")   # supersedes Stripe automatically
 
-# Retrieve — superseded Stripe fact is automatically de-ranked
+# Retrieve — the superseded Stripe fact drops out; only the current one is returned
 results = mem.search("alice", "what does Alice do for work?", k=3)
 for hit in results:
     print(hit.fact.fact_text, hit.final_score)
+# → I now work at Vercel. 0.89
 
 # Point-in-time query — what was true at a specific moment?
-mem.search("alice", "employer", as_of=<timestamp_ms>, is_latest_only=False)
+mem.search("alice", "employer", as_of=1_700_000_000_000, is_latest_only=False)  # epoch ms
 
 # Always close when done (flushes WAL)
 mem.close()
@@ -77,16 +76,41 @@ python examples/chat.py --namespace bob  # separate memory tenant, persists acro
 
 No API key? The demo still runs — it echoes the retrieved memory context instead of calling Claude, so you can watch the engine work offline.
 
-## MCP Server
+## MCP Server — memory for Claude Code / Claude Desktop
 
-Expose lean-memory as three MCP tools (`memory_add`, `memory_search`, `memory_clear`) to any MCP-compatible agent:
+Give any MCP agent persistent local memory: three tools (`memory_add`,
+`memory_search`, `memory_clear`), one SQLite file per namespace, nothing
+leaves your machine.
 
 ```bash
-pip install 'lean-memory[mcp]'
-lean-memory-mcp    # stdio transport
+pip install 'lean-memory[mcp,models]'
 ```
 
-Drop the config from `examples/mcp_config.json` into your Claude Desktop or Claude Code `mcpServers` block. Data root is controlled by `LM_DATA_ROOT` (default `~/.lean_memory`).
+> First run downloads two open models (~1.2 GB total: Qwen3-Embedding-0.6B
+> + Ettin-32M reranker — both ungated). Pre-warm once so your MCP client
+> never waits on a download:
+>
+> ```bash
+> python -c "from lean_memory.embed.sentence_transformer import SentenceTransformerEmbedder; \
+> from lean_memory.retrieve.rerank import CrossEncoderReranker; \
+> SentenceTransformerEmbedder().embed_one('warm'); CrossEncoderReranker().score('warm', ['up'])"
+> ```
+
+**Claude Code:**
+
+```bash
+claude mcp add lean-memory -- lean-memory-mcp
+```
+
+**Claude Desktop** — add to `mcpServers` (or copy `examples/mcp_config.json`):
+
+```json
+{ "lean-memory": { "command": "lean-memory-mcp", "env": { "LM_DATA_ROOT": "~/.lean_memory" } } }
+```
+
+Data root: `LM_DATA_ROOT` (default `~/.lean_memory`). Works offline-only too —
+without the `models` extra the server falls back to deterministic stub backends
+(fine for CI, semantically meaningless for real use — install `[models]`).
 
 ## Real Model Quality
 
@@ -106,7 +130,7 @@ Each `mem.add()` call runs a 4-pass hybrid extraction pipeline:
 
 1. **Rules** — regex + dateparser for common predicates (`works_at`, `lives_in`, …)
 2. **GLiNER2** — open-vocabulary NER candidate generation (offline stub by default)
-3. **Router** — recall-biased escalation: low-confidence, coreference, and cross-turn facts escalate to the LLM pass
+3. **Router** — recall-biased escalation: low-confidence, coreference, and inferential (`derives`) facts escalate to the LLM pass
 4. **LLM typing** — constrained relation typing via a local Ollama model (stub by default)
 
 Contradiction detection runs cheap-first (slot match → cosine → token subsumption → LLM). Conflicting facts are superseded, not deleted — the old fact stays with `is_latest=False` and a `superseded_by` pointer.
@@ -120,7 +144,7 @@ git clone https://github.com/Wuesteon/lean-memory
 cd lean-memory
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
-pytest -q    # 56 tests, all offline, ~4s
+pytest -q    # full offline suite, no downloads
 ```
 
 ## Project Layout
@@ -136,7 +160,7 @@ src/lean_memory/
 examples/
   chat.py                     Terminal demo agent
   mcp_config.json             Drop-in MCP client config
-tests/                        56 offline tests
+tests/                        offline test suite
 bench/                        Retrieval quality + BET-2 ablation harnesses
 ```
 

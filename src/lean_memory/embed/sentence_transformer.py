@@ -1,10 +1,12 @@
-"""Real local embedder, lazily loaded. Default model = EmbeddingGemma-300m (int8-friendly).
+"""Real local embedder, lazily loaded. Default model = Qwen3-Embedding-0.6B (ungated).
 
-Per BET 1 (verified 2026-06): the production default is a *harness-decided* choice
-between EmbeddingGemma-300m and Qwen3-Embedding-0.6B — EmbeddingGemma for
-multilingual/cross-lingual, Qwen3-0.6B for English-only retrieval quality (it beats
-EmbeddingGemma on MTEB Retrieval, 64.65 vs 62.49). Both load through this one class;
-the bench harness picks the winner. Requires the `models` extra (sentence-transformers).
+Per BET 1 (verified 2026-06): Qwen3-0.6B is the default — it is an *ungated* HF repo
+and beats EmbeddingGemma on MTEB Retrieval (64.65 vs 62.49), so it needs no license
+accept and gives stronger English-only retrieval out of the box. EmbeddingGemma-300m
+remains available by name (`SentenceTransformerEmbedder("google/embeddinggemma-300m")`)
+for multilingual/cross-lingual use, but that is a *gated* repo (HF license accept
+required). Both load through this one class. Requires the `models` extra
+(sentence-transformers).
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ class SentenceTransformerEmbedder(Embedder):
 
     def __init__(
         self,
-        model_name: str = "google/embeddinggemma-300m",
+        model_name: str = "Qwen/Qwen3-Embedding-0.6B",
         coarse_dim: int = 256,
         device: str | None = None,
     ) -> None:

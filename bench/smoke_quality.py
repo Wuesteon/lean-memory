@@ -2,15 +2,16 @@
 
 Run with the OFFLINE defaults (FakeEmbedder/IdentityReranker) it only checks the
 *plumbing* (does the relevant fact come back at all). Run with --real it loads
-EmbeddingGemma + Ettin-32M and measures whether ranking actually puts the gold fact
-on top — i.e. the first taste of the BET 1 "reranker is the accuracy lever" claim.
+Qwen3-Embedding-0.6B (ungated) + Ettin-32M and measures whether ranking actually
+puts the gold fact on top — i.e. the first taste of the BET 1 "reranker is the
+accuracy lever" claim.
 
 This is NOT LongMemEval/LoCoMo — it's a 10-line sanity check so plugging real models
 is a one-command verification, not a leap of faith.
 
     python bench/smoke_quality.py            # offline plumbing check
     python bench/smoke_quality.py --real     # needs: pip install 'lean-memory[models]'
-    python bench/smoke_quality.py --real --embedder Qwen/Qwen3-Embedding-0.6B
+    python bench/smoke_quality.py --real --embedder google/embeddinggemma-300m  # gated
 """
 
 from __future__ import annotations
@@ -54,8 +55,8 @@ def build_memory(real: bool, embedder_name: str):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--real", action="store_true", help="use real EmbeddingGemma + Ettin-32M")
-    ap.add_argument("--embedder", default="google/embeddinggemma-300m")
+    ap.add_argument("--real", action="store_true", help="use real Qwen3-0.6B + Ettin-32M")
+    ap.add_argument("--embedder", default="Qwen/Qwen3-Embedding-0.6B")
     args = ap.parse_args()
 
     mem = build_memory(args.real, args.embedder)
