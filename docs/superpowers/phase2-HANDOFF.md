@@ -13,8 +13,9 @@
 > **UPDATE (2026-07-08+):** backlog items 1–3 fixed on `launch-gate`
 > (endpoint-scoped coref, granularity + escalation re-freeze, search-time `now`).
 > Benchmark re-runs are DEFERRED past the MCP launch per
-> `docs/superpowers/specs/2026-07-08-strategic-direction-design.md`. Secrets
-> rotated. The runbook below remains valid for the eventual re-run.
+> `docs/superpowers/specs/2026-07-08-strategic-direction-design.md`. Secret
+> rotation (OpenRouter key + HF token) is still pending — launch-blocking, see
+> the plan's Task 1. The runbook below remains valid for the eventual re-run.
 
 ## Engine-fix backlog (from benchmark findings, in priority order)
 
