@@ -57,7 +57,7 @@ for hit in results:
 # → I now work at Vercel. 0.89
 
 # Point-in-time query — what was true at a specific moment?
-mem.search("alice", "employer", as_of=<timestamp_ms>, is_latest_only=False)
+mem.search("alice", "employer", as_of=1_700_000_000_000, is_latest_only=False)  # epoch ms
 
 # Always close when done (flushes WAL)
 mem.close()
@@ -130,7 +130,7 @@ Each `mem.add()` call runs a 4-pass hybrid extraction pipeline:
 
 1. **Rules** — regex + dateparser for common predicates (`works_at`, `lives_in`, …)
 2. **GLiNER2** — open-vocabulary NER candidate generation (offline stub by default)
-3. **Router** — recall-biased escalation: low-confidence, coreference, and cross-turn facts escalate to the LLM pass
+3. **Router** — recall-biased escalation: low-confidence, coreference, and inferential (`derives`) facts escalate to the LLM pass
 4. **LLM typing** — constrained relation typing via a local Ollama model (stub by default)
 
 Contradiction detection runs cheap-first (slot match → cosine → token subsumption → LLM). Conflicting facts are superseded, not deleted — the old fact stays with `is_latest=False` and a `superseded_by` pointer.
@@ -144,7 +144,7 @@ git clone https://github.com/Wuesteon/lean-memory
 cd lean-memory
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
-pytest -q    # 56 tests, all offline, ~4s
+pytest -q    # full offline suite, no downloads
 ```
 
 ## Project Layout
@@ -160,7 +160,7 @@ src/lean_memory/
 examples/
   chat.py                     Terminal demo agent
   mcp_config.json             Drop-in MCP client config
-tests/                        56 offline tests
+tests/                        offline test suite
 bench/                        Retrieval quality + BET-2 ablation harnesses
 ```
 

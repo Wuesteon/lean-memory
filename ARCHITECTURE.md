@@ -168,7 +168,7 @@ Facts are never deleted or updated in place. A contradicting fact marks the old 
 
 ### Offline-first with pluggable backends
 
-Every component has an offline stub that needs zero downloads and produces deterministic output. Real models are opt-in extras. This means the full test suite (56 tests) runs in ~4 seconds with no network access, and the architecture is validated independently of model availability.
+Every component has an offline stub that needs zero downloads and produces deterministic output. Real models are opt-in extras. This means the full offline test suite runs in seconds with no network access, and the architecture is validated independently of model availability.
 
 ### Cheap-then-escalate contradiction detection
 
@@ -193,7 +193,7 @@ Each namespace (e.g. per-user) gets its own SQLite file rather than a shared dat
 ## Reproduce
 
 ```bash
-# Offline (all 56 tests, ~4s)
+# Offline (full suite, no downloads)
 pip install -e '.[dev]' && pytest -q
 
 # Real retrieval quality

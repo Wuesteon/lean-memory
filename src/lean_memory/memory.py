@@ -98,8 +98,9 @@ class Memory:
         if not candidates:
             return []
 
-        # Pass 3 — recall-biased router. known_entities lets it escalate cross-turn
-        # references (an entity seen before but not introduced in this episode).
+        # Pass 3 — recall-biased router. known_entities is passed to the router/typer
+        # as context only; it no longer drives escalation (the prior_entity trigger was
+        # retired 2026-07 — see bench/results/calibration/README.md).
         known = self._known_entity_names(store, namespace)
         to_type, direct = self.router.route(candidates, known_entities=known)
 
@@ -160,8 +161,9 @@ class Memory:
         )
 
     def _known_entity_names(self, store: SqliteStore, namespace: str) -> set[str]:
-        """Names of entities already seen in this namespace — the router uses these to
-        escalate cross-turn references (the spec's hardest escalation signal).
+        """Names of entities already seen in this namespace — passed to the router/typer
+        as context only; they no longer drive escalation (the prior_entity trigger was
+        retired 2026-07 — see bench/results/calibration/README.md).
         Capped to the most recent _KNOWN_ENTITIES_CAP names (ids are time-sortable)."""
         rows = store._db.execute(
             "SELECT name FROM entity WHERE namespace=? ORDER BY created_at DESC, id DESC LIMIT ?",
