@@ -96,6 +96,41 @@ router `by_reason` facts from this sweep constrain that work:
   2 candidates. Quality of that de-escalation is proved on `--real` by gate 1 (the
   direct-bucket F1 delta now includes the ex-`prior_entity` candidates).
 
+## Task 6 decision — escalation operating point (post-drop real-turn probe)
+
+Post-drop probe on real LongMemEval turns (8 namespaces / 192 turns / 704 candidates),
+`prior_entity` retired so escalation is now driven only by `pre_flagged`/`low_confidence`
+(both threshold-responsive), `coreference`, and `derives`. Controller-run; artifacts
+`2026-07-escalation-postdrop-p{1..4}.json`.
+
+| typing_threshold | conf_threshold | escalated/seen | rate  | by_reason                                            | JSON        |
+|-----------------:|---------------:|---------------:|------:|:-----------------------------------------------------|:------------|
+| **0.40**         | **0.40**       | **103/704**    | **14.6%** | derives 102, coref 1                             | postdrop-p1 |
+| 0.50             | 0.50           | 316/704        | 44.9% | pre_flagged 247, low_conf 247, derives 102, coref 1  | postdrop-p2 |
+| 0.50             | 0.40           | 316/704        | 44.9% | pre_flagged 247, derives 102, coref 1                | postdrop-p3 |
+| 0.40             | 0.50           | 316/704        | 44.9% | low_conf 247, derives 102, coref 1                   | postdrop-p4 |
+
+(by_reason counts sum higher than `escalated` because a candidate can carry multiple
+reasons — the 247 candidates with model confidence in [0.4, 0.5) are exactly the
+population that flips in when either threshold rises to 0.5, driving 14.6% → 44.9%.)
+
+- **Chosen operating point: `(typing_threshold=0.4, conf_threshold=0.4)`** → **14.6%**.
+- Selection rule (from the brief): the **highest** `(typing_threshold, conf_threshold)`
+  pair (most recall-biased) with probe `rate < 0.15` (margin under the 20% gate),
+  tie-broken by higher `conf_threshold`. Only (0.4, 0.4) clears `rate < 0.15` (14.6%);
+  every point that raises *either* threshold to 0.5 pulls in the 247 candidates with
+  model confidence in [0.4, 0.5) (they pre-flag as `needs_typing` and/or trip
+  `low_confidence`), jumping to 44.9%. So (0.4, 0.4) is uniquely selected — no tie to
+  break — and it is simultaneously the most recall-biased qualifying point (lowest
+  thresholds = fewest low-confidence escalations, largest `direct` bucket).
+- Residual at the operating point is **derives-dominated** (102 of 103), i.e. the
+  irreducible inferential-edge escalations the LLM must own; `coreference` contributes 1,
+  `pre_flagged`/`low_confidence` contribute 0 at these thresholds (no candidate had
+  confidence below 0.4).
+- Re-frozen: `DEFAULT_TYPING_THRESHOLD = 0.4` (gliner_extractor), router default
+  `conf_threshold = 0.4`, `FROZEN_CONF_THRESHOLD = 0.4` + `FROZEN_TYPING_THRESHOLD = 0.4`
+  (bet2_goldset). The BET-2 three-gate revalidation (Step 5, `--real`) is run separately.
+
 ## 2026-07 baseline (pre-fix)
 
 - Probe: `phase2_escalation_probe.py --slice ku --namespaces 5 --turns-per-ns 40`

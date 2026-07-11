@@ -1,0 +1,23 @@
+{
+  "slice": "ku",
+  "namespaces": 8,
+  "turns": 192,
+  "results": [
+    {
+      "typing_threshold": 0.5,
+      "conf_threshold": 0.4,
+      "gliner_threshold": 0.4,
+      "seen": 704,
+      "escalated": 316,
+      "rate": 0.44886363636363635,
+      "by_reason": {
+        "pre_flagged": 247,
+        "derives": 102,
+        "coreference": 1
+      },
+      "turns": 192,
+      "facts_per_turn": 3.6666666666666665,
+      "median_fact_len": 182
+    }
+  ]
+}

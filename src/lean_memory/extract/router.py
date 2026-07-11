@@ -249,10 +249,14 @@ class RecallBiasedRouter:
     `cumulative_stats` aggregates across every call on this instance.
     """
 
-    def __init__(self, conf_threshold: float = 0.5) -> None:
-        # The recall knob. Spec/GLiNER2 default candidate threshold is 0.5; anything
-        # the parser was less-than-`conf_threshold` sure of is sent to the LLM. Tunable
-        # so the ablation harness can sweep it against the < 20% escalation target.
+    def __init__(self, conf_threshold: float = 0.4) -> None:
+        # The recall knob. Anything the parser was less-than-`conf_threshold` sure of is
+        # sent to the LLM. Frozen 2026-07 to 0.4 (was 0.5) — the chosen escalation operating
+        # point from the real-turn calibration after the coref (Task 4) + prior_entity-drop
+        # (Task 6) fixes: at (typing=0.4, conf=0.4) the post-drop probe escalates 14.6%
+        # (103/704, derives-dominated), the highest (typing, conf) pair with probe rate < 0.15.
+        # See bench/results/calibration/2026-07-escalation-postdrop-p1.json + the calibration
+        # README. Tunable so the ablation harness can still sweep it.
         self.conf_threshold = float(conf_threshold)
         self._last = RouteStats()
         self._cum = RouteStats()

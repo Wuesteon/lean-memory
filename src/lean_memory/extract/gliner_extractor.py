@@ -76,9 +76,15 @@ DEFAULT_RELATION_TYPES: tuple[str, ...] = (
 # Median length is threshold-insensitive (171-187 across the whole sweep) so it does not gate.
 DEFAULT_THRESHOLD = 0.4
 # A candidate at or below this model confidence is *pre-flagged* for LLM typing (needs_typing).
-# The router (Pass 3) ORs this with its other triggers (coref/ellipsis/cross-turn/derives);
-# we only set the cheap, locally-knowable signal here.
-DEFAULT_TYPING_THRESHOLD = 0.5
+# The router (Pass 3) ORs this with its other triggers (coref/ellipsis/derives); we only set
+# the cheap, locally-knowable signal here.
+# Frozen 2026-07 to 0.4 (was implicit 0.5) — the chosen escalation operating point from the
+# real-turn calibration after the coref (Task 4) + prior_entity-drop (Task 6) fixes. At
+# (typing=0.4, conf=0.4) the post-drop probe escalates 14.6% (103/704), a derives-dominated
+# residual (by_reason derives=102, coreference=1), clearing the <20% gate with margin — the
+# highest (typing, conf) pair with probe rate < 0.15. See
+# bench/results/calibration/2026-07-escalation-postdrop-p1.json and the calibration README.
+DEFAULT_TYPING_THRESHOLD = 0.4
 
 
 class CandidateGenerator(ABC):
