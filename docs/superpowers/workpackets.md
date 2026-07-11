@@ -40,7 +40,7 @@ on the same files).
 | WP7 Async API | `wp7-async` | A | WP4–WP6 | six-week read | open |
 | WP8 Integrations & distribution wave | `wp8-*` (per sub-packet) | C | WP0 | six-week read (spec §5) | open |
 | WP9 NLI middle tier (contingent) | `wp9-nli-resolver` | A | WP0 | **contingent** — see trigger | open |
-| Memory UI | `worktree-memory-ui` | D | — | — | **in flight** (existing worktree; lane occupied) |
+| Memory UI | `worktree-memory-ui` | D | WP0 (rebase gate) | spec §3 rebase gate | **approved, parked** (2026-07-10: spec v2 + 17-task plan committed on the branch; BLOCKED until WP0 Task 11 merges to main, then rebase + subagent-driven execution) |
 
 Lanes: **A** = engine/API surface (`src/lean_memory/` hot zone — strictly
 sequential within the lane). **B** = benchmarks (`bench/` — parallel-safe with
