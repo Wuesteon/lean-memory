@@ -119,6 +119,14 @@ for (`[models]` → real embedder + reranker, `[extract]` → GLiNER2 extraction
 and otherwise falls back to deterministic stub backends (fine for CI,
 semantically meaningless for real use — install `[mcp,models,extract]`).
 
+> **What the optional `[llm]` extra buys.** The canonical `[mcp,models,extract]`
+> install has no LLM typing pass, so the ~15% of candidates that escalate —
+> almost all of them inferential (`derives`) facts — are typed by a
+> deterministic stub instead of a model. Assertional facts are unaffected;
+> inference-type facts are effectively second-class on the default path. Adding
+> `[llm]` (a local Ollama model) upgrades that escalated tier to real
+> constrained typing. See ARCHITECTURE.md → Known Limitations.
+
 ## Real Model Quality
 
 The default backends are offline stubs — deterministic and dependency-free, but semantically meaningless. Swap in real models for production-quality retrieval:
