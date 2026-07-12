@@ -64,6 +64,12 @@ class SqliteStore(Store):
         self._check_existing_dims()
         sql = SCHEMA_SQL.format(dim=self.dim, coarse_dim=self.coarse_dim)
         self._db.executescript(sql)
+        # Schema-version stamp — the migration anchor for future releases.
+        # Version 1 == the 0.1.x layout; pre-stamp files (0.1.0–0.1.2, version 0)
+        # have an identical schema and are upgraded in place. Never write over a
+        # NEWER release's stamp.
+        if self._db.execute("PRAGMA user_version").fetchone()[0] == 0:
+            self._db.execute("PRAGMA user_version = 1")
         self._db.commit()
 
     def _check_existing_dims(self) -> None:
