@@ -1,11 +1,37 @@
 [project]
 name = "lean-memory"
-version = "0.0.1"
-description = "Embedded, local-first agent-memory engine — Phase 0 spine (Store interface, SQLite vec0+FTS5, hybrid retrieval+rerank)."
+version = "0.1.0"
+description = "Embedded, local-first agent memory with hybrid retrieval and ADD-only supersession."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "lean-memory" }]
+keywords = [
+    "agent-memory",
+    "memory",
+    "llm",
+    "mcp",
+    "sqlite",
+    "embeddings",
+    "retrieval",
+    "vector-search",
+    "local-first",
+    "rag",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Database :: Database Engines/Servers",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     # Phase 0 spine: SQLite vec0 extension + sparse lexical + hybrid fusion.
     # No mandatory cloud key, no LLM, no server. (Per design spec, Phase 0.)
@@ -50,6 +76,10 @@ dev = [
 
 [project.scripts]
 lean-memory-mcp = "lean_memory.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/Wuesteon/lean-memory"
+Repository = "https://github.com/Wuesteon/lean-memory"
 
 [build-system]
 requires = ["hatchling"]
