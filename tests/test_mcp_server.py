@@ -10,6 +10,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+# The MCP server (and thus every test that imports it) needs the optional [mcp]
+# extra. Skip the whole module with a clear reason when it is absent, so a bare
+# `pip install -e '.[dev]'` + pytest run skips these tests instead of erroring
+# at collection. CI installs `.[dev,mcp]`, so all tests still run there.
+mcp = pytest.importorskip("mcp", reason="optional [mcp] extra not installed")
+
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -25,9 +33,6 @@ def test_pyproject_declares_mcp_extra_and_script():
     assert any(req.startswith("mcp>=1.0") for req in extras["mcp"]), extras["mcp"]
     scripts = data["project"].get("scripts", {})
     assert scripts.get("lean-memory-mcp") == "lean_memory.mcp_server:main"
-
-
-import pytest
 
 
 @pytest.fixture
