@@ -4,6 +4,13 @@ All notable changes to lean-memory are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-07-12
+
+### Added
+- MCP Registry metadata: `server.json` (io.github.wuesteon/lean-memory) and an
+  OIDC publish workflow; `mcp-name` ownership marker in the README (required by
+  the registry's PyPI validation — the reason for this patch release).
+
 ## [0.1.0] - 2026-07-12
 
 First public release. lean-memory is an embedded, local-first agent-memory
