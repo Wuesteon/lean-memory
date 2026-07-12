@@ -1,5 +1,7 @@
 # lean-memory
 
+[![test](https://github.com/Wuesteon/lean-memory/actions/workflows/test.yml/badge.svg)](https://github.com/Wuesteon/lean-memory/actions/workflows/test.yml)
+
 Embedded, local-first agent memory. No server, no daemon, no mandatory cloud key.
 
 > **Status (2026-07):** working toward the first public launch (MCP-first).
