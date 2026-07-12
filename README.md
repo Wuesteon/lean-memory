@@ -182,3 +182,6 @@ bench/                        Retrieval quality + BET-2 ablation harnesses
 ## License
 
 Apache-2.0
+
+<!-- mcp-name: io.github.wuesteon/lean-memory -->
+

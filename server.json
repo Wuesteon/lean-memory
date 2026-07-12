@@ -1,0 +1,49 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.wuesteon/lean-memory",
+  "description": "Embedded, local-first agent memory: one SQLite file per namespace, no server, no cloud.",
+  "title": "lean-memory",
+  "repository": {
+    "url": "https://github.com/Wuesteon/lean-memory",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "lean-memory",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--from",
+          "value": "lean-memory",
+          "isRequired": true,
+          "description": "Install the lean-memory package, then run its lean-memory-mcp console-script entry point (the package name and script name differ, so uvx needs --from)."
+        }
+      ],
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "lean-memory-mcp",
+          "isRequired": true,
+          "description": "Console script entry point that starts the stdio MCP server."
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "LM_DATA_ROOT",
+          "description": "Directory for per-namespace SQLite memory files. Defaults to ~/.lean_memory when unset.",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "~/.lean_memory"
+        }
+      ]
+    }
+  ]
+}
