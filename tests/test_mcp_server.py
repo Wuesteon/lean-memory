@@ -145,3 +145,64 @@ def test_example_config_is_valid_and_points_at_script():
     assert entry["command"] == "lean-memory-mcp"
     # LM_DATA_ROOT is documented in the example env block
     assert "LM_DATA_ROOT" in entry.get("env", {})
+
+
+# ── _build_memory opportunistic upgrades (P0-3) ──────────────────────────────
+# _build_memory has two INDEPENDENT opportunistic upgrades: sentence_transformers
+# (embedder+reranker) and gliner2 (extraction). These tests pin the fallback and
+# the GLiNER-active behaviour offline, without any model download, by controlling
+# what is importable via sys.modules.
+
+
+def test_build_memory_falls_back_to_stubs_when_no_extras(tmp_path, monkeypatch):
+    """Neither extra importable → default Memory: stub embedder AND StubCandidateGenerator."""
+    import sys
+
+    import lean_memory.mcp_server as srv
+    from lean_memory.embed.fake import FakeEmbedder
+    from lean_memory.extract.gliner_extractor import StubCandidateGenerator
+    from lean_memory.retrieve.rerank import IdentityReranker
+
+    # Make both optional extras un-importable regardless of the environment: block
+    # the import and evict any cached module so the try/except takes the fallback.
+    real_import = __import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name in ("sentence_transformers", "gliner2"):
+            raise ImportError(f"blocked {name} for test")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.delitem(sys.modules, "sentence_transformers", raising=False)
+    monkeypatch.delitem(sys.modules, "gliner2", raising=False)
+    monkeypatch.setattr("builtins.__import__", blocked_import)
+
+    mem = srv._build_memory(tmp_path)
+    try:
+        assert isinstance(mem.embedder, FakeEmbedder)
+        assert isinstance(mem.reranker, IdentityReranker)
+        assert isinstance(mem.generator, StubCandidateGenerator)
+    finally:
+        mem.close()
+
+
+def test_build_memory_uses_gliner2_when_importable(tmp_path, monkeypatch):
+    """gliner2 importable → generator is a Gliner2Generator (no model download).
+
+    We inject a fake `gliner2` module so the `import gliner2` guard succeeds; the
+    real weights never load because Gliner2Generator lazy-loads GLiNER2 only on the
+    first generate() call, which this test never makes.
+    """
+    import sys
+    import types as _types
+
+    import lean_memory.mcp_server as srv
+    from lean_memory.extract.gliner_extractor import Gliner2Generator
+
+    fake_gliner2 = _types.ModuleType("gliner2")
+    monkeypatch.setitem(sys.modules, "gliner2", fake_gliner2)
+
+    mem = srv._build_memory(tmp_path)
+    try:
+        assert isinstance(mem.generator, Gliner2Generator)
+    finally:
+        mem.close()

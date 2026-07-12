@@ -30,21 +30,42 @@ def _data_root() -> Path:
 
 
 def _build_memory(root: Path) -> Memory:
-    """Real backends when the `models` extra is present; offline stubs otherwise."""
+    """Opportunistically upgrade each backend when its optional extra is present.
+
+    Two INDEPENDENT upgrades, each guarded by its own import so either can succeed
+    without the other (`[models]` without `[extract]`, or vice versa):
+      * `models`  (sentence_transformers) → real embedder + reranker for retrieval.
+      * `extract` (gliner2)               → Gliner2Generator for real extraction.
+    Anything not installed falls back to lean-memory's deterministic offline stubs,
+    so the server always runs. GLiNER matters especially here: the frozen escalation/
+    granularity constants were calibrated ON the GLiNER path, so shipping it aligns
+    the canonical install with what the engine was tuned against.
+    """
+    kwargs: dict = {}
+
     try:
         import sentence_transformers  # noqa: F401
 
         from .embed.sentence_transformer import SentenceTransformerEmbedder
         from .retrieve.rerank import CrossEncoderReranker
 
-        return Memory(
-            root=root,
-            embedder=SentenceTransformerEmbedder(),
-            reranker=CrossEncoderReranker(),
-        )
+        kwargs["embedder"] = SentenceTransformerEmbedder()
+        kwargs["reranker"] = CrossEncoderReranker()
     except ImportError:
-        # `models` extra not installed — deterministic offline stubs.
-        return Memory(root=root)
+        # `models` extra not installed — keep the deterministic offline stub backends.
+        pass
+
+    try:
+        import gliner2  # noqa: F401
+
+        from .extract.gliner_extractor import Gliner2Generator
+
+        kwargs["generator"] = Gliner2Generator()
+    except ImportError:
+        # `extract` extra not installed — keep the stub candidate generator.
+        pass
+
+    return Memory(root=root, **kwargs)
 
 
 mcp = FastMCP("lean-memory")
