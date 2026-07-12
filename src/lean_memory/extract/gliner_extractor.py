@@ -29,7 +29,9 @@ router's escalation rate (<20% target), not the candidate count.
 
 from __future__ import annotations
 
+import contextlib
 import re
+import sys
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
@@ -161,7 +163,11 @@ class Gliner2Generator(CandidateGenerator):
             ) from exc
         # map_location="cpu" keeps us on CPU even if a checkpoint defaults elsewhere; the base
         # model is built for efficient CPU inference (no GPU required).
-        self._model = GLiNER2.from_pretrained(self.model_name, map_location="cpu")
+        # stdout is the MCP stdio protocol channel: gliner2's from_pretrained prints a
+        # model-config banner with bare print(), which would interleave with JSON-RPC
+        # framing on the first lazy load. Route load-time chatter to stderr.
+        with contextlib.redirect_stdout(sys.stderr):
+            self._model = GLiNER2.from_pretrained(self.model_name, map_location="cpu")
         return self._model
 
     def generate(self, episode: Episode) -> list[Candidate]:
