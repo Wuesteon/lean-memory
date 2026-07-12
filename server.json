@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.wuesteon/lean-memory",
+  "name": "io.github.Wuesteon/lean-memory",
   "description": "Embedded, local-first agent memory: one SQLite file per namespace, no server, no cloud.",
   "title": "lean-memory",
   "repository": {
