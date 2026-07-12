@@ -98,6 +98,15 @@ _MULTIVALUED_PREDICATES = frozenset(
 )
 
 
+def is_multivalued(predicate: str) -> bool:
+    """Does this predicate naturally hold many co-valid values at once?
+
+    Multi-valued slots (likes/uses/knows/...) accumulate; everything else is
+    FUNCTIONAL — one current value, so a replacement retires the whole slot
+    (memory.py applies supersession accordingly)."""
+    return predicate in _MULTIVALUED_PREDICATES
+
+
 @runtime_checkable
 class LLMTyper(Protocol):
     """Pass-4 constrained-typing backend, narrowed to the adjudication this resolver needs.
