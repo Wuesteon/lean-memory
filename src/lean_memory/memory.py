@@ -11,6 +11,7 @@ comfort). The Memory object owns a small cache of open per-namespace stores.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -18,7 +19,7 @@ from .embed.base import Embedder
 from .embed.fake import FakeEmbedder
 from .extract.contradiction import SUPERSEDES, ContradictionResolver, is_multivalued
 from .extract.gliner_extractor import CandidateGenerator, StubCandidateGenerator
-from .extract.llm_typer import StubTyper, TypedFact, Typer
+from .extract.llm_typer import StubTyper, TypedFact, Typer, TyperError
 from .extract.router import RecallBiasedRouter
 from .extract.salience import score_salience
 from .retrieve.rerank import IdentityReranker, Reranker
@@ -108,7 +109,23 @@ class Memory:
         # set is trivially explicit and typed cheaply (asserts, unless an inference cue).
         typed: list[TypedFact] = []
         if to_type:
-            typed += self.typer.type_candidates(episode.raw, to_type, known_entities=list(known))
+            try:
+                typed += self.typer.type_candidates(
+                    episode.raw, to_type, known_entities=list(known)
+                )
+            except TyperError as exc:
+                # TyperError == the real backend is unavailable (Ollama down /
+                # package missing), the contract llm_typer documents for exactly
+                # this fallback. Crashing would fail every add() for [llm] users
+                # whose server isn't running; stub-type the batch instead.
+                print(
+                    f"[lean-memory] LLM typer unavailable ({exc}); "
+                    "falling back to stub typing for this batch",
+                    file=sys.stderr,
+                )
+                typed += StubTyper().type_candidates(
+                    episode.raw, to_type, known_entities=list(known)
+                )
         if direct:
             typed += StubTyper().type_candidates(episode.raw, direct, known_entities=list(known))
 
