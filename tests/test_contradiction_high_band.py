@@ -72,3 +72,19 @@ def test_high_band_functional_predicate_still_supersedes():
     d = resolver.classify(new, [existing], embedder)
     assert d.label == SUPERSEDES
     assert d.route == "high_supersedes"
+
+
+def test_high_band_functional_slot_ignores_conjunction_cue():
+    """The high-band co-validity signal is the PREDICATE, not a textual cue: a
+    replacement phrased with a conjunction ('I left Acme and now work at
+    Globex.') must still supersede on a functional slot — the stray 'and'
+    matches _ADDITIVE_CUE but says nothing about co-validity at high cosine."""
+    resolver = ContradictionResolver()
+    embedder = PinnedEmbedder(cosine=0.85)
+    existing = _fact("works_at", "Acme", "I work at Acme.")
+    embedder.embed_one("Acme")
+    new = _fact("works_at", "Globex", "I left Acme and now work at Globex.")
+
+    d = resolver.classify(new, [existing], embedder)
+    assert d.label == SUPERSEDES
+    assert d.route == "high_supersedes"

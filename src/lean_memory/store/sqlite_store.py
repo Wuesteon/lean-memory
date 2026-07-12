@@ -95,12 +95,12 @@ class SqliteStore(Store):
             if have is not None and have != want:
                 self._db.close()
                 raise ValueError(
-                    f"embedder dimension mismatch: {self.path} was created with a "
-                    f"{stored.get('embedding', have)}-dim embedder ({column} FLOAT[{have}]), "
-                    f"but the current embedder produces {want}-dim vectors. Either keep "
-                    f"using the embedder this namespace was created with, or delete the "
-                    f"namespace file (plus its -wal/-shm siblings) to rebuild it with the "
-                    f"new embedder — its facts will need re-adding."
+                    f"embedder dimension mismatch: {self.path} was created with "
+                    f"{column} FLOAT[{have}], but the current embedder produces "
+                    f"{want}-dim vectors for that column. Either keep using the "
+                    f"embedder this namespace was created with, or delete the "
+                    f"namespace file (plus its -wal/-shm siblings) to rebuild it "
+                    f"with the new embedder — its facts will need re-adding."
                 )
 
     # ── provenance ──
@@ -267,10 +267,14 @@ class SqliteStore(Store):
                    ORDER BY score LIMIT ?""",
                 (_fts_query(query_text), k * (2 if needs_row_check else 1)),
             ).fetchall()
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
             # The sparse arm is best-effort: _fts_query quotes every term, but if a
             # malformed MATCH ever slips through again, degrade to no sparse hits
             # rather than failing the whole search (the dense arm still serves).
+            # Only syntax errors qualify — anything else ('database is locked',
+            # corruption) is a real store error and must propagate.
+            if "syntax error" not in str(exc):
+                raise
             return []
         out: list[tuple[str, float]] = []
         for r in rows:

@@ -51,6 +51,24 @@ def test_operator_words_still_match_as_plain_terms(tmp_path):
     mem.close()
 
 
+def test_sparse_search_propagates_non_syntax_operational_errors(tmp_path):
+    """Only FTS syntax errors degrade to []; a real store error like 'database
+    is locked' must propagate, not silently drop the lexical arm."""
+    import sqlite3
+
+    mem = Memory(root=tmp_path)
+    mem.add("ns", "I like coffee and tea.", t_ref=0)
+    store = mem._store("ns")
+
+    class LockedDb:
+        def execute(self, *a, **kw):
+            raise sqlite3.OperationalError("database is locked")
+
+    store._db = LockedDb()
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        store.sparse_search("coffee", k=3)
+
+
 def test_sparse_search_degrades_on_malformed_fts_query(tmp_path, monkeypatch):
     """Defense in depth: if a malformed query ever reaches FTS5 again, the sparse
     arm returns [] instead of blowing up the whole search."""

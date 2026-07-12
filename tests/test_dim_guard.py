@@ -43,6 +43,21 @@ def test_reopen_with_different_dim_raises_actionable_error(tmp_path):
     assert "embedder" in msg.lower()
 
 
+def test_coarse_dim_mismatch_names_the_coarse_dims(tmp_path):
+    """A mismatch on the COARSE column must report that column's dims, not the
+    (matching) full-embedding dim."""
+    path = tmp_path / "ns.db"
+    SqliteStore(path, dim=768, coarse_dim=256).close()
+
+    with pytest.raises(ValueError) as exc:
+        SqliteStore(path, dim=768, coarse_dim=128)
+    msg = str(exc.value)
+    assert "embedding_256" in msg
+    assert "256" in msg and "128" in msg
+    # The full-embedding dim MATCHED — naming it would misdirect the user.
+    assert "768" not in msg
+
+
 def test_reopen_with_same_dim_is_fine(tmp_path):
     path = tmp_path / "ns.db"
     store = SqliteStore(path, dim=768)

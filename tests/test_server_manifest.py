@@ -47,3 +47,10 @@ def test_manifest_versions_match_pyproject():
     version = pyproject["project"]["version"]
     assert manifest["version"] == version
     assert manifest["packages"][0]["version"] == version
+
+
+def test_package_dunder_version_matches_pyproject():
+    import lean_memory
+
+    pyproject = tomllib.loads((_ROOT / "pyproject.toml").read_text())
+    assert lean_memory.__version__ == pyproject["project"]["version"]
