@@ -32,10 +32,12 @@ correctness majors — all fixed here.
   cue ("I also work at Globex.") kept two conflicting current employers. A
   replacement on a functional slot now retires every co-valid latest fact;
   multi-valued slots keep single-target retirement.
-- **High-similarity band ignored the additive signal**: with real embedders,
+- **High-similarity band ignored multi-valued slots**: with real embedders,
   distinct co-valid values on a multi-valued slot (jazz/blues) embed at cosine
-  0.6–0.95 and were silently superseded; the additive check now applies in
-  every band (new resolver route: `high_extends_additive`).
+  0.6–0.95 and were silently superseded; multi-valued predicates now stay
+  co-valid in every band (new resolver route: `high_extends_additive`).
+  Predicate-scoped on purpose: the textual cue ("and"/"also") stays a
+  low/mid-band signal so a conjunction-phrased replacement still supersedes.
 - **`[llm]` extra crashed every add() with Ollama stopped**: `Memory.add` now
   catches `TyperError` and stub-types the escalated batch, as the typer
   contract always documented.
