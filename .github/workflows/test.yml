@@ -1,0 +1,43 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Provision Python via uv (python-build-standalone). Unlike
+      # actions/setup-python, these builds are compiled with loadable-sqlite
+      # extensions enabled, which sqlite-vec needs to load — the macOS
+      # setup-python builds are not, so extension loading fails there.
+      # One code path for both OSes.
+      - name: Set up uv + Python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      # setup-uv with a python-version input already provisions and activates a
+      # venv (it exports VIRTUAL_ENV), so no explicit `uv venv` step is needed —
+      # the install below targets that activated environment.
+      - name: Install (editable, dev + mcp extras)
+        run: uv pip install -e '.[dev,mcp]'
+
+      - name: Run offline test suite
+        run: uv run pytest tests/ -q

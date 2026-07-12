@@ -185,6 +185,7 @@ Each namespace (e.g. per-user) gets its own SQLite file rather than a shared dat
 - **No benchmark-grade quality claim.** All numbers are on small hand-built sets. A real claim needs LongMemEval/LoCoMo + a frozen judge (Phase 2, deferred post-launch).
 - **Recency on historical corpora — addressed (2026-07).** `exp(-λ·age)` collapses to ~0 for every fact when historical data is read years later, so the 0.2 recency term was dead weight on such corpora. `Memory.search(now=...)` now forwards an explicit search-time anchor so callers evaluating historical data can restore the recency signal; the wall-clock default is unchanged for live use.
 - **Vectors stored float32, not int8.** sqlite-vec 0.1.9's int8 insert path is broken upstream. Flip when fixed (~0.2pt quality cost per BET-1, no correctness impact).
+- **Inference typing is second-class without `[llm]`.** On the default `[mcp,models,extract]` path there is no Ollama typer, so the ~15% of candidates that escalate — almost entirely inferential (`derives`) facts — fall through to the deterministic `StubTyper` rather than a model. Assertional facts are unaffected; inference-type facts are second-class until you add the `[llm]` extra, which routes that escalated tier through real constrained typing.
 - **Small-model ceiling.** qwen2.5:3b caps Typer accuracy. A larger local model would likely lift derives-recall. Untested.
 - **Single machine, single run** for all real numbers. Reproducible, but not multi-seed/multi-judge as the spec's BET-5 demands.
 

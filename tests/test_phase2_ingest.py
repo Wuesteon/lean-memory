@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bench"))
 
 from phase2_ingest import parse_lme_timestamp, parse_locomo_timestamp
@@ -111,6 +113,11 @@ def test_offline_ingest_cache_and_resume(tmp_path):
 
 
 def test_remote_typer_env_wiring(monkeypatch):
+    # _get_client() below does `import ollama` (the optional [llm] extra); skip
+    # cleanly on a bare `.[dev]` install instead of erroring. CI installs the
+    # extras that make this run.
+    pytest.importorskip("ollama", reason="optional [llm] extra not installed")
+
     from phase2_ingest import build_typer
 
     monkeypatch.delenv("PHASE2_OLLAMA_HOST", raising=False)

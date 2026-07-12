@@ -1,5 +1,7 @@
 # lean-memory
 
+[![test](https://github.com/Wuesteon/lean-memory/actions/workflows/test.yml/badge.svg)](https://github.com/Wuesteon/lean-memory/actions/workflows/test.yml)
+
 Embedded, local-first agent memory. No server, no daemon, no mandatory cloud key.
 
 > **Status (2026-07):** working toward the first public launch (MCP-first).
@@ -83,17 +85,20 @@ Give any MCP agent persistent local memory: three tools (`memory_add`,
 leaves your machine.
 
 ```bash
-pip install 'lean-memory[mcp,models]'
+pip install 'lean-memory[mcp,models,extract]'
 ```
 
-> First run downloads two open models (~1.2 GB total: Qwen3-Embedding-0.6B
-> + Ettin-32M reranker — both ungated). Pre-warm once so your MCP client
-> never waits on a download:
+> First run downloads three open models (~2.0 GB total: Qwen3-Embedding-0.6B
+> + Ettin-32M reranker for retrieval, plus GLiNER2-base (~0.8 GB) for real
+> extraction — all ungated). Pre-warm once so your MCP client never waits on
+> a download:
 >
 > ```bash
 > python -c "from lean_memory.embed.sentence_transformer import SentenceTransformerEmbedder; \
 > from lean_memory.retrieve.rerank import CrossEncoderReranker; \
-> SentenceTransformerEmbedder().embed_one('warm'); CrossEncoderReranker().score('warm', ['up'])"
+> SentenceTransformerEmbedder().embed_one('warm'); CrossEncoderReranker().score('warm', ['up']); \
+> from lean_memory.extract.gliner_extractor import Gliner2Generator; from lean_memory.types import Episode; \
+> Gliner2Generator().generate(Episode(namespace='w', raw='I work at Acme.', t_ref=0, source='user'))"
 > ```
 
 **Claude Code:**
@@ -109,8 +114,18 @@ claude mcp add lean-memory -- lean-memory-mcp
 ```
 
 Data root: `LM_DATA_ROOT` (default `~/.lean_memory`). Works offline-only too —
-without the `models` extra the server falls back to deterministic stub backends
-(fine for CI, semantically meaningless for real use — install `[models]`).
+the server opportunistically upgrades each backend that its extra is installed
+for (`[models]` → real embedder + reranker, `[extract]` → GLiNER2 extraction)
+and otherwise falls back to deterministic stub backends (fine for CI,
+semantically meaningless for real use — install `[mcp,models,extract]`).
+
+> **What the optional `[llm]` extra buys.** The canonical `[mcp,models,extract]`
+> install has no LLM typing pass, so the ~15% of candidates that escalate —
+> almost all of them inferential (`derives`) facts — are typed by a
+> deterministic stub instead of a model. Assertional facts are unaffected;
+> inference-type facts are effectively second-class on the default path. Adding
+> `[llm]` (a local Ollama model) upgrades that escalated tier to real
+> constrained typing. See ARCHITECTURE.md → Known Limitations.
 
 ## Real Model Quality
 
