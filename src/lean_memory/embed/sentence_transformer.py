@@ -11,6 +11,9 @@ required). Both load through this one class. Requires the `models` extra
 
 from __future__ import annotations
 
+import contextlib
+import sys
+
 import numpy as np
 
 from .base import Embedder
@@ -48,7 +51,10 @@ class SentenceTransformerEmbedder(Embedder):
                     "SentenceTransformerEmbedder needs the 'models' extra: "
                     "pip install 'lean-memory[models]'"
                 ) from e
-            self._model = SentenceTransformer(self.model_name, device=self._device)
+            # stdout is the MCP stdio protocol channel — any load-time library
+            # chatter there would corrupt JSON-RPC framing on a lazy first load.
+            with contextlib.redirect_stdout(sys.stderr):
+                self._model = SentenceTransformer(self.model_name, device=self._device)
             self.dim = self._model.get_sentence_embedding_dimension() or self.dim
         return self._model
 

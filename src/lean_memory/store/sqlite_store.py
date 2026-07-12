@@ -14,6 +14,7 @@ scaling by 127 and rounding. vec0 does the distance math in int8 space.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 from typing import Optional, Sequence
@@ -60,9 +61,47 @@ class SqliteStore(Store):
         return db
 
     def _init_schema(self) -> None:
+        self._check_existing_dims()
         sql = SCHEMA_SQL.format(dim=self.dim, coarse_dim=self.coarse_dim)
         self._db.executescript(sql)
+        # Schema-version stamp — the migration anchor for future releases.
+        # Version 1 == the 0.1.x layout; pre-stamp files (0.1.0–0.1.2, version 0)
+        # have an identical schema and are upgraded in place. Never write over a
+        # NEWER release's stamp.
+        if self._db.execute("PRAGMA user_version").fetchone()[0] == 0:
+            self._db.execute("PRAGMA user_version = 1")
         self._db.commit()
+
+    def _check_existing_dims(self) -> None:
+        """Refuse to open a store whose vec0 table was created for a different embedder.
+
+        The vec0 DDL bakes the dim in at creation and CREATE ... IF NOT EXISTS keeps
+        the old table on reopen, so a dim mismatch (e.g. 768-dim offline stub → the
+        1024-dim Qwen default after installing [models]) would otherwise surface deep
+        in the pipeline as an opaque insert/shape error against a half-usable DB.
+        """
+        row = self._db.execute(
+            "SELECT sql FROM sqlite_master WHERE name='fact_vec'"
+        ).fetchone()
+        if row is None or not row["sql"]:
+            return  # fresh file — schema created below with the current dims
+        stored = {
+            m.group(1): int(m.group(2))
+            for m in re.finditer(r"(embedding(?:_256)?)\s+FLOAT\[(\d+)\]", row["sql"])
+        }
+        expected = {"embedding": self.dim, "embedding_256": self.coarse_dim}
+        for column, want in expected.items():
+            have = stored.get(column)
+            if have is not None and have != want:
+                self._db.close()
+                raise ValueError(
+                    f"embedder dimension mismatch: {self.path} was created with "
+                    f"{column} FLOAT[{have}], but the current embedder produces "
+                    f"{want}-dim vectors for that column. Either keep using the "
+                    f"embedder this namespace was created with, or delete the "
+                    f"namespace file (plus its -wal/-shm siblings) to rebuild it "
+                    f"with the new embedder — its facts will need re-adding."
+                )
 
     # ── provenance ──
     def add_episode(self, episode: Episode) -> None:
@@ -220,13 +259,23 @@ class SqliteStore(Store):
     ) -> list[tuple[str, float]]:
         # FTS5 BM25: lower bm25() is better, so we negate to "higher is better".
         needs_row_check = is_latest_only or as_of is not None
-        rows = self._db.execute(
-            """SELECT f.fact_id AS fact_id, bm25(fact_fts) AS score
-               FROM fact_fts f
-               WHERE fact_fts MATCH ?
-               ORDER BY score LIMIT ?""",
-            (_fts_query(query_text), k * (2 if needs_row_check else 1)),
-        ).fetchall()
+        try:
+            rows = self._db.execute(
+                """SELECT f.fact_id AS fact_id, bm25(fact_fts) AS score
+                   FROM fact_fts f
+                   WHERE fact_fts MATCH ?
+                   ORDER BY score LIMIT ?""",
+                (_fts_query(query_text), k * (2 if needs_row_check else 1)),
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            # The sparse arm is best-effort: _fts_query quotes every term, but if a
+            # malformed MATCH ever slips through again, degrade to no sparse hits
+            # rather than failing the whole search (the dense arm still serves).
+            # Only syntax errors qualify — anything else ('database is locked',
+            # corruption) is a real store error and must propagate.
+            if "syntax error" not in str(exc):
+                raise
+            return []
         out: list[tuple[str, float]] = []
         for r in rows:
             if needs_row_check:
@@ -270,12 +319,17 @@ class SqliteStore(Store):
 
 # ── FTS query sanitization ──
 def _fts_query(text: str) -> str:
-    """Turn free text into a safe FTS5 OR-query of bare terms (avoids syntax errors
-    from punctuation/operators in user text)."""
+    """Turn free text into a safe FTS5 OR-query of QUOTED terms.
+
+    Quoting matters: FTS5 treats the bare uppercase tokens AND/OR/NOT/NEAR as
+    operators, so 'coffee AND tea' would otherwise become the malformed
+    'coffee OR AND OR tea' and raise. A quoted term is a string literal — inert
+    as an operator, still matched case-insensitively by the tokenizer. Terms are
+    alnum-only after the scrub, so no embedded quote can break out."""
     terms = [t for t in "".join(c if c.isalnum() else " " for c in text).split() if t]
     if not terms:
         return '""'
-    return " OR ".join(terms)
+    return " OR ".join(f'"{t}"' for t in terms)
 
 
 # ── row → dataclass ──

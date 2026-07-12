@@ -46,7 +46,13 @@ def _build_memory(root: Path) -> Memory:
     Each successful upgrade logs ONE line to stderr (stdout is the MCP protocol
     channel — NEVER print to stdout here) so cold-cache users, who wait through a
     ~2 GB download on first tool call, see progress in their client's server logs.
+
+    LM_FORCE_STUBS (env) pins the deterministic offline stubs even when the
+    extras are installed — for tests/CI that must never load a model.
     """
+    if os.environ.get("LM_FORCE_STUBS"):
+        return Memory(root=root)
+
     kwargs: dict = {}
 
     try:

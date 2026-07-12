@@ -4,6 +4,59 @@ All notable changes to lean-memory are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-07-12
+
+Publish-readiness release: an independent multi-team review of v0.1.2 found
+three launch blockers on the canonical MCP first-run path plus packaging and
+correctness majors — all fixed here.
+
+### Fixed
+- **MCP Registry install crashed on startup**: `server.json` ran
+  `uvx --from lean-memory lean-memory-mcp`, but `mcp` is an optional extra, so
+  every registry install died with `ModuleNotFoundError`. The manifest now
+  installs `lean-memory[mcp,models,extract]` (pinned by a manifest test).
+- **Model banner corrupted the MCP stdio stream**: gliner2's `from_pretrained`
+  prints a config banner to stdout — the JSON-RPC channel — on the first
+  `memory_add` of the canonical install. All model lazy-loads (GLiNER2,
+  SentenceTransformer, CrossEncoder) now route load-time chatter to stderr.
+- **Embedder swap bricked existing namespaces**: reopening a DB created with a
+  different embedder dimension (768-dim offline stub → 1024-dim Qwen after
+  installing `[models]`) failed deep in retrieval with an opaque shape error;
+  the store now refuses the mismatch at open with an actionable message.
+- **Uppercase FTS5 operator words crashed search**: `'coffee AND tea'` raised
+  `sqlite3.OperationalError` through `Memory.search` and the `memory_search`
+  tool. Terms are now quoted FTS5 string literals; the sparse arm degrades to
+  no-hits on any residual syntax error.
+- **Functional-slot supersession left stale facts current**: a replacement
+  retired only the single most-similar fact, so a slot extended by an additive
+  cue ("I also work at Globex.") kept two conflicting current employers. A
+  replacement on a functional slot now retires every co-valid latest fact;
+  multi-valued slots keep single-target retirement.
+- **High-similarity band ignored multi-valued slots**: with real embedders,
+  distinct co-valid values on a multi-valued slot (jazz/blues) embed at cosine
+  0.6–0.95 and were silently superseded; multi-valued predicates now stay
+  co-valid in every band (new resolver route: `high_extends_additive`).
+  Predicate-scoped on purpose: the textual cue ("and"/"also") stays a
+  low/mid-band signal so a conjunction-phrased replacement still supersedes.
+- **`[llm]` extra crashed every add() with Ollama stopped**: `Memory.add` now
+  catches `TyperError` and stub-types the escalated batch, as the typer
+  contract always documented.
+- **Packaging**: Apache-2.0 `LICENSE` added (repo, wheel, and sdist — the
+  license was previously declared but its text shipped nowhere); the sdist is
+  scoped to user-facing files (0.1.2 shipped internal strategy docs, agent
+  instructions, and the bench harness to PyPI); the README hero GIF uses an
+  absolute URL so the PyPI page renders it; the demo-agent flow is clone-based
+  (the script was never in the wheel).
+
+### Added
+- Schema-version stamp (`PRAGMA user_version = 1`) as the migration anchor for
+  0.1.x namespace files (pre-stamp files upgrade in place; newer stamps are
+  never downgraded).
+- `LM_FORCE_STUBS` env var pins the offline stub backends in the MCP server
+  (for tests/CI that must never load a model).
+- Subprocess-level MCP stdio protocol test: handshake + real tool call, every
+  stdout line must parse as JSON. CI matrix now covers Python 3.11/3.12.
+
 ## [0.1.2] - 2026-07-12
 
 ### Fixed

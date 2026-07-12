@@ -7,13 +7,13 @@
     "url": "https://github.com/Wuesteon/lean-memory",
     "source": "github"
   },
-  "version": "0.1.2",
+  "version": "0.1.3",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "lean-memory",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -22,9 +22,9 @@
         {
           "type": "named",
           "name": "--from",
-          "value": "lean-memory",
+          "value": "lean-memory[mcp,models,extract]",
           "isRequired": true,
-          "description": "Install the lean-memory package, then run its lean-memory-mcp console-script entry point (the package name and script name differ, so uvx needs --from)."
+          "description": "Install lean-memory with the extras the server needs: [mcp] (imported at startup — a bare install crashes), plus [models] and [extract] (the canonical real-quality backends; ~2 GB of open models download on first tool call). The package name and script name differ, so uvx needs --from."
         }
       ],
       "packageArguments": [

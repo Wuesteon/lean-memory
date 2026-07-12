@@ -11,14 +11,15 @@ comfort). The Memory object owns a small cache of open per-namespace stores.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 from typing import Optional
 
 from .embed.base import Embedder
 from .embed.fake import FakeEmbedder
-from .extract.contradiction import EXTENDS, SUPERSEDES, ContradictionResolver
+from .extract.contradiction import SUPERSEDES, ContradictionResolver, is_multivalued
 from .extract.gliner_extractor import CandidateGenerator, StubCandidateGenerator
-from .extract.llm_typer import StubTyper, TypedFact, Typer
+from .extract.llm_typer import StubTyper, TypedFact, Typer, TyperError
 from .extract.router import RecallBiasedRouter
 from .extract.salience import score_salience
 from .retrieve.rerank import IdentityReranker, Reranker
@@ -108,7 +109,23 @@ class Memory:
         # set is trivially explicit and typed cheaply (asserts, unless an inference cue).
         typed: list[TypedFact] = []
         if to_type:
-            typed += self.typer.type_candidates(episode.raw, to_type, known_entities=list(known))
+            try:
+                typed += self.typer.type_candidates(
+                    episode.raw, to_type, known_entities=list(known)
+                )
+            except TyperError as exc:
+                # TyperError == the real backend is unavailable (Ollama down /
+                # package missing), the contract llm_typer documents for exactly
+                # this fallback. Crashing would fail every add() for [llm] users
+                # whose server isn't running; stub-type the batch instead.
+                print(
+                    f"[lean-memory] LLM typer unavailable ({exc}); "
+                    "falling back to stub typing for this batch",
+                    file=sys.stderr,
+                )
+                typed += StubTyper().type_candidates(
+                    episode.raw, to_type, known_entities=list(known)
+                )
         if direct:
             typed += StubTyper().type_candidates(episode.raw, direct, known_entities=list(known))
 
@@ -127,12 +144,33 @@ class Memory:
 
             full, coarse = self.embedder.embed_with_coarse(fact.fact_text)
             store.add_fact(fact, full, coarse)
-            # SUPERSEDES retires the matched fact; EXTENDS keeps both co-valid; ASSERTS
-            # touches nothing else. Insert-new-first so the FK target exists.
-            if decision.label == SUPERSEDES and decision.target is not None:
-                store.supersede_fact(decision.target.id, fact.id, valid_to=fact.valid_at)
+            # SUPERSEDES retires the slot per _apply_supersession; EXTENDS keeps both
+            # co-valid; ASSERTS touches nothing else. Insert-new-first so the FK
+            # target exists.
+            self._apply_supersession(store, decision, fact, slot_latest)
             written.append(fact.id)
         return written
+
+    @staticmethod
+    def _apply_supersession(store, decision, fact, slot_latest) -> None:
+        """Retire what a SUPERSEDES decision replaces (no-op for other labels).
+
+        The resolver returns a single most-similar target, but a FUNCTIONAL slot
+        (one current value) can hold N>1 co-valid latest facts when an earlier
+        additive cue extended it — retiring only the target would leave stale
+        contradictory facts is_latest=1, and current-state reads would return two
+        employers. A replacement on a functional slot therefore retires EVERY
+        latest fact in the slot. Multi-valued slots (likes/uses/...) keep the
+        single-target behavior: the user's other co-valid values survive.
+        """
+        if decision.label != SUPERSEDES or decision.target is None:
+            return
+        if is_multivalued(fact.predicate):
+            targets = [decision.target]
+        else:
+            targets = [f for f in slot_latest if f.id != fact.id]
+        for old in targets:
+            store.supersede_fact(old.id, fact.id, valid_to=fact.valid_at)
 
     def _build_fact(
         self, tf: TypedFact, *, namespace: str, episode_id: str, store: SqliteStore

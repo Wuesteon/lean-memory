@@ -98,6 +98,15 @@ _MULTIVALUED_PREDICATES = frozenset(
 )
 
 
+def is_multivalued(predicate: str) -> bool:
+    """Does this predicate naturally hold many co-valid values at once?
+
+    Multi-valued slots (likes/uses/knows/...) accumulate; everything else is
+    FUNCTIONAL — one current value, so a replacement retires the whole slot
+    (memory.py applies supersession accordingly)."""
+    return predicate in _MULTIVALUED_PREDICATES
+
+
 @runtime_checkable
 class LLMTyper(Protocol):
     """Pass-4 constrained-typing backend, narrowed to the adjudication this resolver needs.
@@ -216,6 +225,19 @@ class ContradictionResolver:
             if _is_refinement(new_fact, best):
                 return Decision(
                     label=EXTENDS, target=best, similarity=best_sim, route="high_extends"
+                )
+            # Multi-valued predicates stay co-valid at EVERY band: with the real
+            # default embedder, distinct co-valid values on a multi-valued slot
+            # (jazz/blues, Python/Rust) embed at cosine 0.6-0.95, so without this
+            # check the high band silently retired facts the user still holds.
+            # PREDICATE-scoped on purpose — the textual _ADDITIVE_CUE ('and',
+            # 'also') is too weak here: at high cosine a replacement phrased with
+            # a conjunction ('I left Acme and now work at Globex.') would keep a
+            # stale value on a functional slot.
+            if is_multivalued(new_fact.predicate):
+                return Decision(
+                    label=EXTENDS, target=best, similarity=best_sim,
+                    route="high_extends_additive",
                 )
             # Same object, no added detail and not equal text ⇒ a restated change
             # (e.g. "moved to Berlin" vs "moved to Munich" that still embed close):

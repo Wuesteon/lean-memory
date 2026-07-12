@@ -19,6 +19,14 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         python-version: ["3.10", "3.13"]
+        # The classifiers advertise 3.10–3.13; cover the middle versions on
+        # Linux so no advertised version ships untested (macOS stays on the
+        # bounds to bound runner cost).
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v4
 

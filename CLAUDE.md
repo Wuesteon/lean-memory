@@ -29,10 +29,16 @@ spec — they are a post-launch credibility layer, not the critical path. The
 harness (`bench/phase2_*.py`) is complete and needs no changes for the eventual
 re-run.
 
-**Remaining next steps = launch execution** per spec §3 (MCP Registry listing,
+Gate item 5 is CLOSED (secrets rotated 2026-07-11 — revoked in dashboards,
+local copies deleted; harness branch merged and labels removed). A 2026-07-12
+publish-readiness review board found three launch blockers on the v0.1.2 MCP
+first-run path (registry manifest missing the [mcp] extra, model banner
+corrupting the stdio JSON-RPC stream, embedder dim-swap bricking existing DBs)
+plus packaging majors (no LICENSE file, sdist shipping internal docs) — all
+fixed as **v0.1.3** (see CHANGELOG.md). **Remaining next steps: tag/release
+v0.1.3, then launch execution** per spec §3 (MCP Registry listing,
 `awesome-mcp-servers` PR, Claude Code plugin marketplace, PyPI polish, Show HN,
-subreddit posts); security housekeeping (rotate the OpenRouter key + HF token,
-merge the harness branch) is gate item 5.
+subreddit posts).
 
 Historical context (dated, do not re-derive): `docs/phase2-learnings.md`
 (assumptions vs. reality postmortem) and `docs/superpowers/phase2-HANDOFF.md`

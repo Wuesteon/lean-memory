@@ -10,6 +10,8 @@ superiority). Phase 0 ships:
 
 from __future__ import annotations
 
+import contextlib
+import sys
 from abc import ABC, abstractmethod
 
 
@@ -48,7 +50,10 @@ class CrossEncoderReranker(Reranker):
                     "CrossEncoderReranker needs the 'models' extra: "
                     "pip install 'lean-memory[models]'"
                 ) from e
-            self._model = CrossEncoder(self.model_name)
+            # stdout is the MCP stdio protocol channel — any load-time library
+            # chatter there would corrupt JSON-RPC framing on a lazy first load.
+            with contextlib.redirect_stdout(sys.stderr):
+                self._model = CrossEncoder(self.model_name)
         return self._model
 
     def score(self, query: str, docs: list[str]) -> list[float]:
