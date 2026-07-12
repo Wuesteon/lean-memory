@@ -217,6 +217,15 @@ class ContradictionResolver:
                 return Decision(
                     label=EXTENDS, target=best, similarity=best_sim, route="high_extends"
                 )
+            # The additive signal applies at EVERY band: with the real default
+            # embedder, distinct co-valid values on a multi-valued slot
+            # (jazz/blues, Python/Rust) embed at cosine 0.6-0.95, so without this
+            # check the high band silently retired facts the user still holds.
+            if _is_additive(new_fact):
+                return Decision(
+                    label=EXTENDS, target=best, similarity=best_sim,
+                    route="high_extends_additive",
+                )
             # Same object, no added detail and not equal text ⇒ a restated change
             # (e.g. "moved to Berlin" vs "moved to Munich" that still embed close):
             # treat as a replacement on the slot.
