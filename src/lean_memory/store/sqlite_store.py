@@ -14,6 +14,7 @@ scaling by 127 and rounding. vec0 does the distance math in int8 space.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 from typing import Optional, Sequence
@@ -60,9 +61,41 @@ class SqliteStore(Store):
         return db
 
     def _init_schema(self) -> None:
+        self._check_existing_dims()
         sql = SCHEMA_SQL.format(dim=self.dim, coarse_dim=self.coarse_dim)
         self._db.executescript(sql)
         self._db.commit()
+
+    def _check_existing_dims(self) -> None:
+        """Refuse to open a store whose vec0 table was created for a different embedder.
+
+        The vec0 DDL bakes the dim in at creation and CREATE ... IF NOT EXISTS keeps
+        the old table on reopen, so a dim mismatch (e.g. 768-dim offline stub → the
+        1024-dim Qwen default after installing [models]) would otherwise surface deep
+        in the pipeline as an opaque insert/shape error against a half-usable DB.
+        """
+        row = self._db.execute(
+            "SELECT sql FROM sqlite_master WHERE name='fact_vec'"
+        ).fetchone()
+        if row is None or not row["sql"]:
+            return  # fresh file — schema created below with the current dims
+        stored = {
+            m.group(1): int(m.group(2))
+            for m in re.finditer(r"(embedding(?:_256)?)\s+FLOAT\[(\d+)\]", row["sql"])
+        }
+        expected = {"embedding": self.dim, "embedding_256": self.coarse_dim}
+        for column, want in expected.items():
+            have = stored.get(column)
+            if have is not None and have != want:
+                self._db.close()
+                raise ValueError(
+                    f"embedder dimension mismatch: {self.path} was created with a "
+                    f"{stored.get('embedding', have)}-dim embedder ({column} FLOAT[{have}]), "
+                    f"but the current embedder produces {want}-dim vectors. Either keep "
+                    f"using the embedder this namespace was created with, or delete the "
+                    f"namespace file (plus its -wal/-shm siblings) to rebuild it with the "
+                    f"new embedder — its facts will need re-adding."
+                )
 
     # ── provenance ──
     def add_episode(self, episode: Episode) -> None:
