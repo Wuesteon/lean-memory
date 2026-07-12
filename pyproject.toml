@@ -88,6 +88,35 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/lean_memory"]
 
+# The sdist is a public artifact: allowlist what a user or downstream packager
+# needs. Without this, hatchling ships every tracked file — which for 0.1.2
+# meant internal strategy docs (docs/superpowers/), agent instructions
+# (CLAUDE.md), and the whole bench/ harness went to PyPI.
+[tool.hatch.build.targets.sdist]
+# Leading slashes anchor to the project root (gitwildmatch): an unanchored
+# "src/" would also match e.g. .claude/worktrees/*/src/ at any depth.
+include = [
+    "/src/",
+    "/tests/",
+    "/examples/",
+    "/README.md",
+    "/ARCHITECTURE.md",
+    "/PERFORMANCE.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/server.json",
+    "/pyproject.toml",
+]
+exclude = [
+    "/.claude/",
+    "/.gitignore",
+    # These test the bench/ harness (not shipped) via sys.path insertion and
+    # cannot collect without it; the fixtures are their LongMemEval-derived data.
+    "/tests/test_phase2_*.py",
+    "/tests/test_escalation_probe.py",
+    "/tests/fixtures/",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
