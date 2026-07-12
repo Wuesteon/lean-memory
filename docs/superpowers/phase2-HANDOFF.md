@@ -14,8 +14,10 @@
 > (endpoint-scoped coref, granularity + escalation re-freeze, search-time `now`).
 > Benchmark re-runs are DEFERRED past the MCP launch per
 > `docs/superpowers/specs/2026-07-08-strategic-direction-design.md`. Secret
-> rotation (OpenRouter key + HF token) is still pending — launch-blocking, see
-> the plan's Task 1. The runbook below remains valid for the eventual re-run.
+> rotation (OpenRouter key + HF token) completed 2026-07-11: both revoked in
+> their dashboards, local copies deleted with `bench/.phase2_cache` (plan
+> Task 1). The runbook below remains valid for the eventual re-run — a future
+> bench session must create fresh credentials at the same two file paths.
 
 ## Engine-fix backlog (from benchmark findings, in priority order)
 

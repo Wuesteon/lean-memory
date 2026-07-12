@@ -83,11 +83,11 @@ packet early is a conscious strategy change — record it here if taken.
 **Branch:** `launch-gate` (this is the existing plan, not a new worktree).
 **Plan:** `docs/superpowers/plans/2026-07-08-launch-quality-gate.md`.
 
-Remaining tasks: **1** (rotate OpenRouter key + HF token — browser step),
-**5** (GLiNER granularity calibration — working-tree changes exist, uncommitted),
-**6** (pick + re-freeze the escalation operating point, run the three BET-2
-gates), **10** (realign CLAUDE.md / ARCHITECTURE.md / handoff status),
-**11** (whole-branch review, merge to `main`, delete stale branch labels).
+**COMPLETE (2026-07-11/12):** all tasks done — merged to `main` (b4acb29),
+secrets rotated 2026-07-11 (revoked in dashboards, local copies deleted),
+stale branch labels removed locally and on origin. Post-gate, a publish-
+readiness review board found three launch blockers on the v0.1.2 MCP first-run
+path; the fixes ship as v0.1.3 (see CHANGELOG).
 
 Already landed on this branch: escalation probe with `--json` (`496c1a7`),
 baseline sweep — best point 95.9% at 0.3/0.3, coref floor 65.6% (`31ec8ad`),
