@@ -33,11 +33,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
 
-      - name: Create venv
-        run: uv venv
-
+      # setup-uv with a python-version input already provisions and activates a
+      # venv (it exports VIRTUAL_ENV), so no explicit `uv venv` step is needed —
+      # the install below targets that activated environment.
       - name: Install (editable, dev + mcp extras)
         run: uv pip install -e '.[dev,mcp]'
 
       - name: Run offline test suite
-        run: uv run --no-project pytest tests/ -q
+        run: uv run pytest tests/ -q
