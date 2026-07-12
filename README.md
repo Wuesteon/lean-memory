@@ -21,7 +21,7 @@ mem.add("user-42", "I now work at Globex.")          # supersedes Acme automatic
 mem.search("user-42", "where does the user work?")   # → "I now work at Globex."
 ```
 
-![lean-memory quickstart](docs/assets/quickstart.gif)
+![lean-memory quickstart](https://raw.githubusercontent.com/Wuesteon/lean-memory/main/docs/assets/quickstart.gif)
 
 Facts are extracted from natural language, stored in a per-namespace SQLite file, and retrieved with hybrid dense+sparse search. Old facts are never deleted — they're superseded and queryable at any past point in time.
 
@@ -67,10 +67,12 @@ mem.close()
 
 ## Demo Agent
 
-A terminal chatbot showing the full memory loop — add, retrieve, supersede, restart:
+A terminal chatbot showing the full memory loop — add, retrieve, supersede, restart.
+The demo script lives in the repo (it is not installed with the package):
 
 ```bash
-pip install 'lean-memory[examples]'
+git clone https://github.com/Wuesteon/lean-memory && cd lean-memory
+pip install -e '.[examples]'
 export ANTHROPIC_API_KEY=sk-ant-...
 python examples/chat.py                  # uses offline stubs by default
 python examples/chat.py --namespace bob  # separate memory tenant, persists across restarts
