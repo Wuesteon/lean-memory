@@ -253,13 +253,19 @@ class SqliteStore(Store):
     ) -> list[tuple[str, float]]:
         # FTS5 BM25: lower bm25() is better, so we negate to "higher is better".
         needs_row_check = is_latest_only or as_of is not None
-        rows = self._db.execute(
-            """SELECT f.fact_id AS fact_id, bm25(fact_fts) AS score
-               FROM fact_fts f
-               WHERE fact_fts MATCH ?
-               ORDER BY score LIMIT ?""",
-            (_fts_query(query_text), k * (2 if needs_row_check else 1)),
-        ).fetchall()
+        try:
+            rows = self._db.execute(
+                """SELECT f.fact_id AS fact_id, bm25(fact_fts) AS score
+                   FROM fact_fts f
+                   WHERE fact_fts MATCH ?
+                   ORDER BY score LIMIT ?""",
+                (_fts_query(query_text), k * (2 if needs_row_check else 1)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # The sparse arm is best-effort: _fts_query quotes every term, but if a
+            # malformed MATCH ever slips through again, degrade to no sparse hits
+            # rather than failing the whole search (the dense arm still serves).
+            return []
         out: list[tuple[str, float]] = []
         for r in rows:
             if needs_row_check:
@@ -303,12 +309,17 @@ class SqliteStore(Store):
 
 # ── FTS query sanitization ──
 def _fts_query(text: str) -> str:
-    """Turn free text into a safe FTS5 OR-query of bare terms (avoids syntax errors
-    from punctuation/operators in user text)."""
+    """Turn free text into a safe FTS5 OR-query of QUOTED terms.
+
+    Quoting matters: FTS5 treats the bare uppercase tokens AND/OR/NOT/NEAR as
+    operators, so 'coffee AND tea' would otherwise become the malformed
+    'coffee OR AND OR tea' and raise. A quoted term is a string literal — inert
+    as an operator, still matched case-insensitively by the tokenizer. Terms are
+    alnum-only after the scrub, so no embedded quote can break out."""
     terms = [t for t in "".join(c if c.isalnum() else " " for c in text).split() if t]
     if not terms:
         return '""'
-    return " OR ".join(terms)
+    return " OR ".join(f'"{t}"' for t in terms)
 
 
 # ── row → dataclass ──
