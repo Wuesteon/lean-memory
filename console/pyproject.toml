@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lean-memory-console"
+version = "0.0.1"
+description = "Agent-first read-only verification console for lean-memory"
+requires-python = ">=3.10"
+dependencies = [
+    "lean-memory",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "mcp>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx", "pyyaml"]
+
+[project.scripts]
+lean-memory-console = "lean_memory_console.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lean_memory_console"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"../deploy/docker-compose.yml" = "lean_memory_console/deploy/docker-compose.yml"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
