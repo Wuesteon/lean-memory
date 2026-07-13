@@ -64,8 +64,15 @@ CMD ["lean-memory-console", "serve", "--docker", "--root", "/data", "--no-open"]
 
 # ── full runtime (real models) ───────────────────────────────────────────
 FROM slim AS full
-# CPU torch + sentence-transformers + reranker via the core [models] extra.
-RUN python -m pip install '.[models]'
+# Real embedder + reranker via the core [models] extra (sentence-transformers +
+# torch). Pin the CPU-only torch build FIRST from the dedicated PyTorch CPU wheel
+# index, so the subsequent `.[models]` resolve finds torch already satisfied and
+# does NOT pull the default CUDA wheels (torch + nvidia-cudnn + cuda-toolkit ≈
+# +5 GB). The CPU index serves linux/aarch64 and x86_64 cp313 wheels, matching
+# python:3.13-slim. `--no-cache-dir` is also implied by PIP_NO_CACHE_DIR=1.
+RUN python -m pip install --no-cache-dir torch \
+      --index-url https://download.pytorch.org/whl/cpu \
+ && python -m pip install --no-cache-dir '.[models]'
 # HF cache lives on a mounted volume so downloads survive container restarts.
 ENV HF_HOME=/root/.cache/huggingface
 VOLUME ["/root/.cache/huggingface"]

@@ -51,6 +51,30 @@ def test_dockerfile_cmd_selects_docker_mode() -> None:
     )
 
 
+def test_dockerfile_full_stage_pins_cpu_torch() -> None:
+    # The [models] extra depends on torch>=2.2. Without pinning, pip resolves the
+    # default CUDA wheels (torch + nvidia-cudnn + cuda-toolkit) → ~5.5 GB image on
+    # a CPU-only target. The full stage must install torch from the PyTorch CPU
+    # wheel index BEFORE the extra, so the resolve keeps the CPU build. Regression
+    # guard: the CPU index URL must appear, and after the `FROM slim AS full`.
+    text = DOCKERFILE.read_text()
+    full_block = text.split("FROM slim AS full")[-1]
+    assert "download.pytorch.org/whl/cpu" in full_block, (
+        "full stage must pin torch to the PyTorch CPU wheel index (no CUDA wheels)"
+    )
+    # The CPU-index install must come before the [models] extra INSTALL so the
+    # extra sees torch already satisfied. Ordering is checked against install
+    # lines only (comments mention [models] too), so ignore comment lines.
+    code = "\n".join(
+        ln for ln in full_block.splitlines() if not ln.lstrip().startswith("#")
+    )
+    cpu_at = code.find("download.pytorch.org/whl/cpu")
+    models_at = code.find("[models]")
+    assert cpu_at != -1 and models_at != -1 and cpu_at < models_at, (
+        "CPU torch must be installed before the [models] extra"
+    )
+
+
 def test_compose_targets_full_and_requires_api_key() -> None:
     data = yaml.safe_load(COMPOSE.read_text())
     svc = data["services"]["console"]
