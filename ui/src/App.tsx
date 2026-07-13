@@ -73,10 +73,14 @@ function Shell() {
     if (status !== "ready") return;
     let cancelled = false;
     listNamespaces()
-      .then((ns) => {
+      .then((list) => {
         if (cancelled) return;
-        setNamespaces(ns);
-        setActiveNs((prev) => prev ?? (ns.length ? ns[0].name : null));
+        setNamespaces(list);
+        // Revalidate the active namespace: keep it only if it still exists,
+        // otherwise fall back to the first namespace (or null when empty).
+        setActiveNs((prev) =>
+          prev && list.some((n) => n.name === prev) ? prev : list[0]?.name ?? null,
+        );
       })
       .catch((e) => !cancelled && setNsError(String(e)));
     return () => {
@@ -116,7 +120,10 @@ function Shell() {
         />
         <Route path="/memories" element={<Memories ns={ns} />} />
         <Route path="/episodes" element={<Episodes ns={ns} />} />
-        <Route path="/activity" element={<Activity ns={ns} />} />
+        <Route
+          path="/activity"
+          element={<Activity ns={ns} models={whoami.models} />}
+        />
       </Routes>
     </Layout>
   );

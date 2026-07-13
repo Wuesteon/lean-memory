@@ -36,6 +36,7 @@ def build_views_router() -> APIRouter:
     def whoami(request: Request):
         config = request.app.state.config
         from ..app import _is_authenticated
+        from ..engine import resolved_models_mode
 
         auth = "bearer" if config.mode == "docker" else "token"
         return {
@@ -43,6 +44,10 @@ def build_views_router() -> APIRouter:
             "auth": auth,
             "authenticated": _is_authenticated(request, config),
             "data_root": str(config.data_root),
+            # Resolved retrieval-backend mode ("real"|"stub"), NOT the raw env:
+            # "stub" whenever the built Memory uses deterministic offline
+            # scores, so the UI can warn that semantic scores are stub-generated.
+            "models": resolved_models_mode(config),
         }
 
     @router.get("/namespaces", dependencies=[Depends(require_auth)])
@@ -135,8 +140,10 @@ def build_views_router() -> APIRouter:
     async def test_search(
         request: Request, namespace: str, body: TestSearchBody
     ):
-        if is_reserved_namespace(namespace):
-            raise HTTPException(status_code=404, detail="unknown namespace")
+        # Guard existence (and reserved) exactly like _ns_db: a search against a
+        # nonexistent namespace must 404, NOT create the .db file as a side
+        # effect of the engine opening it.
+        _ns_db(request, namespace)
         gateway = request.app.state.gateway
         result = await gateway.search(
             namespace, body.query, k=body.k, latest_only=True, origin="ui"

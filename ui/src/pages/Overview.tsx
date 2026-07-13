@@ -1,6 +1,7 @@
 import type { NamespaceCard, WhoAmI } from "../types";
 import Sparkline from "../components/Sparkline";
 import ConnectSnippets from "../components/ConnectSnippets";
+import StubBanner from "../components/StubBanner";
 import {
   factsPerAdd,
   formatBytes,
@@ -92,16 +93,22 @@ export default function Overview({
 }) {
   if (namespaces.length === 0) {
     return (
-      <div className="p-6">
-        <ConnectSnippets mode={who.mode} dataRoot={who.data_root} />
-      </div>
+      <>
+        <StubBanner models={who.models} />
+        <div className="p-6">
+          <ConnectSnippets mode={who.mode} dataRoot={who.data_root} />
+        </div>
+      </>
     );
   }
   return (
-    <div className="grid gap-4 p-6 md:grid-cols-2">
-      {namespaces.map((ns) => (
-        <Card key={ns.name} ns={ns} />
-      ))}
-    </div>
+    <>
+      <StubBanner models={who.models} />
+      <div className="grid gap-4 p-6 md:grid-cols-2">
+        {namespaces.map((ns) => (
+          <Card key={ns.name} ns={ns} />
+        ))}
+      </div>
+    </>
   );
 }

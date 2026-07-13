@@ -1,11 +1,15 @@
 export type Mode = "local" | "docker";
 export type AuthKind = "token" | "bearer";
+export type ModelsMode = "real" | "stub";
 
 export interface WhoAmI {
   mode: Mode;
   auth: AuthKind;
   authenticated: boolean;
   data_root: string;
+  // Resolved retrieval-backend mode. "stub" means semantic scores are
+  // deterministic offline placeholders (spec §11 banner).
+  models: ModelsMode;
 }
 
 export interface Envelope<T> {

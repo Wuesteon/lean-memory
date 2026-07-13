@@ -1,32 +1,46 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listEvents, listNamespaces } from "../api";
-import type { EventRow } from "../types";
+import type { EventRow, ModelsMode } from "../types";
 import EventFeed from "../components/EventFeed";
 import TestSearchBox from "../components/TestSearchBox";
+import StubBanner from "../components/StubBanner";
 
 const POLL_MS = 4000;
 const PAGE_SIZE = 50;
 
 type KindFilter = "all" | "add" | "search";
 
-export default function Activity({ ns }: { ns: string }) {
+export default function Activity({
+  ns,
+  models,
+}: {
+  ns: string;
+  models: ModelsMode;
+}) {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [kind, setKind] = useState<KindFilter>("all");
   const [error, setError] = useState<string | null>(null);
   const [hasSidecar, setHasSidecar] = useState<boolean | null>(null);
   const loadedOnce = useRef(false);
 
-  const fetchEvents = useCallback(() => {
-    if (!ns) return;
-    const k = kind === "all" ? undefined : kind;
-    listEvents(ns, k, 1, PAGE_SIZE)
-      .then((env) => {
-        setEvents(env.items);
-        setError(null);
-        loadedOnce.current = true;
-      })
-      .catch((e) => setError(String(e)));
-  }, [ns, kind]);
+  const fetchEvents = useCallback(
+    (isCancelled?: () => boolean) => {
+      if (!ns) return;
+      const k = kind === "all" ? undefined : kind;
+      listEvents(ns, k, 1, PAGE_SIZE)
+        .then((env) => {
+          if (isCancelled?.()) return;
+          setEvents(env.items);
+          setError(null);
+          loadedOnce.current = true;
+        })
+        .catch((e) => {
+          if (isCancelled?.()) return;
+          setError(String(e));
+        });
+    },
+    [ns, kind],
+  );
 
   // reset per-namespace state so events never bleed across namespaces
   useEffect(() => {
@@ -54,25 +68,37 @@ export default function Activity({ ns }: { ns: string }) {
   }, [ns, events.length]);
 
   useEffect(() => {
+    let cancelled = false;
+    const isCancelled = () => cancelled;
     loadedOnce.current = false;
-    fetchEvents();
+    fetchEvents(isCancelled);
     const id = window.setInterval(() => {
       if (document.hidden) return;
-      fetchEvents();
+      fetchEvents(isCancelled);
     }, POLL_MS);
-    return () => window.clearInterval(id);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
   }, [fetchEvents]);
 
   if (!ns) {
-    return <div className="p-6 text-sm text-slate-500">No namespace selected.</div>;
+    return (
+      <>
+        <StubBanner models={models} />
+        <div className="p-6 text-sm text-slate-500">No namespace selected.</div>
+      </>
+    );
   }
 
   const missingSidecar =
     loadedOnce.current && events.length === 0 && hasSidecar === false;
 
   return (
-    <div className="space-y-4 p-6">
-      <TestSearchBox ns={ns} onRan={fetchEvents} />
+    <>
+      <StubBanner models={models} />
+      <div className="space-y-4 p-6">
+        <TestSearchBox ns={ns} onRan={() => fetchEvents()} />
 
       <div className="flex items-center gap-3">
         <span className="text-xs text-slate-500">filter</span>
@@ -110,6 +136,7 @@ export default function Activity({ ns }: { ns: string }) {
       {!missingSidecar && events.length === 0 && !error && (
         <p className="text-sm text-slate-400">no events yet</p>
       )}
-    </div>
+      </div>
+    </>
   );
 }

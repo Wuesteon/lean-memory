@@ -63,6 +63,8 @@ def test_whoami_local_no_auth(local):
     assert body["auth"] == "token"
     assert body["authenticated"] is False
     assert "data_root" in body
+    # models="stub" fixture → resolved models mode reported as "stub".
+    assert body["models"] == "stub"
 
 
 def test_whoami_docker_no_auth(docker):
@@ -71,6 +73,7 @@ def test_whoami_docker_no_auth(docker):
     assert body["mode"] == "docker"
     assert body["auth"] == "bearer"
     assert body["authenticated"] is False
+    assert body["models"] == "stub"
 
 
 def test_whoami_authenticated_local(local):
@@ -222,3 +225,18 @@ def test_test_search_records_ui_and_excluded_from_activity(local):
         n["activity"]["searches"] for n in after if n["name"] == ns
     )
     assert after_searches == before_searches
+
+
+def test_test_search_nonexistent_namespace_404_no_file(local):
+    cfg, client = local
+    missing = "no_such_namespace_xyz"
+    db_path = cfg.data_root / f"{missing}.db"
+    assert not db_path.exists()
+    r = client.post(
+        f"/views/{missing}/test-search",
+        params={"token": "sesame"},
+        json={"query": "test", "k": 3},
+    )
+    assert r.status_code == 404
+    # The engine must NOT have created the namespace .db as a side effect.
+    assert not db_path.exists()
