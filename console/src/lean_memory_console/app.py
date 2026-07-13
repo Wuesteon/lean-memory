@@ -19,11 +19,9 @@ from .engine import EngineGateway
 from .events import EventLog
 from .routes.views import build_views_router
 
-# Loopback hostnames accepted in local mode (DNS-rebinding guard). "testserver"
-# is Starlette's synthetic in-process test host: it never reaches a real network
-# socket, so it carries no rebinding risk and must be allowed for the harness to
-# drive the local app.
-_ALLOWED_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "testserver"})
+# Loopback hostnames accepted in local mode (DNS-rebinding guard). Exact-match
+# only: a startswith check would wrongly admit e.g. "localhost.attacker.com".
+_ALLOWED_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
 
 
 def _is_authenticated(request: Request, config: ConsoleConfig) -> bool:

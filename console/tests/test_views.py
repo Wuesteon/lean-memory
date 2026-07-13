@@ -31,7 +31,9 @@ def local(data_root):
     log = EventLog(data_root)
     gw = EngineGateway(cfg, log)
     app = create_app(cfg, gw, log)
-    client = TestClient(app)
+    # Drive the local app with a loopback Host so the DNS-rebinding guard admits
+    # it (the production allowlist is exactly {127.0.0.1, localhost}).
+    client = TestClient(app, base_url="http://127.0.0.1")
     yield cfg, client
     gw.close()
     log.close()
@@ -46,7 +48,7 @@ def docker(data_root):
     log = EventLog(data_root)
     gw = EngineGateway(cfg, log)
     app = create_app(cfg, gw, log)
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
     yield cfg, client
     gw.close()
     log.close()
@@ -77,9 +79,23 @@ def test_whoami_authenticated_local(local):
     assert body["authenticated"] is True
 
 
+def test_whoami_authenticated_docker(docker):
+    _cfg, client = docker
+    body = client.get(
+        "/views/whoami", headers={"Authorization": "Bearer secretkey"}
+    ).json()
+    assert body["authenticated"] is True
+
+
 def test_namespaces_requires_token(local):
     _cfg, client = local
     assert client.get("/views/namespaces").status_code == 401
+
+
+def test_namespaces_wrong_token(local):
+    _cfg, client = local
+    r = client.get("/views/namespaces", params={"token": "wrong"})
+    assert r.status_code == 401
 
 
 def test_namespaces_bad_bearer(docker):
@@ -145,6 +161,23 @@ def test_fact_detail_has_chain(local):
     body = r.json()
     assert "chain" in body
     assert isinstance(body["chain"], list)
+
+
+def test_reserved_namespace_404(local):
+    _cfg, client = local
+    # "_events" sanitizes to a reserved (leading-underscore) namespace.
+    r = client.get(
+        "/views/_events/facts", params={"token": "sesame"}
+    )
+    assert r.status_code == 404
+
+
+def test_unknown_namespace_404(local):
+    _cfg, client = local
+    r = client.get(
+        "/views/does-not-exist/facts", params={"token": "sesame"}
+    )
+    assert r.status_code == 404
 
 
 def test_events_kind_filter(local):

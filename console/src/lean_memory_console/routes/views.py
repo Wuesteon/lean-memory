@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ..config import is_reserved_namespace, ns_db_path, sanitize_namespace
+from ..config import is_reserved_namespace, ns_db_path
 from .. import inspect_sql
 
 
