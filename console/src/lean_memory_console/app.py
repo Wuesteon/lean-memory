@@ -8,6 +8,7 @@ Host header (DNS-rebinding belt-and-suspenders).
 
 from __future__ import annotations
 
+import secrets
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
@@ -34,16 +35,25 @@ def _static_dir() -> Path:
     return Path(__file__).parent / "static"
 
 
+def _ct_eq(presented: str | None, expected: str | None) -> bool:
+    """Constant-time string equality. False unless BOTH sides are non-None
+    strings (compare_digest raises on None/mismatched types), so a missing
+    credential or unconfigured secret never authenticates."""
+    if not isinstance(presented, str) or not isinstance(expected, str):
+        return False
+    return secrets.compare_digest(presented, expected)
+
+
 def _is_authenticated(request: Request, config: ConsoleConfig) -> bool:
     if config.mode == "docker":
         header = request.headers.get("Authorization", "")
-        expected = f"Bearer {config.api_key}"
-        return bool(config.api_key) and header == expected
+        expected = f"Bearer {config.api_key}" if config.api_key else None
+        return _ct_eq(header, expected)
     # local mode: query token OR X-Console-Token header
     token = request.query_params.get("token") or request.headers.get(
         "X-Console-Token"
     )
-    return bool(config.session_token) and token == config.session_token
+    return _ct_eq(token, config.session_token)
 
 
 def require_auth(request: Request) -> None:

@@ -46,6 +46,7 @@ Two SDK-1.28.1 decisions, both disclosed:
 
 from __future__ import annotations
 
+import secrets
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -139,7 +140,9 @@ def build_mcp_mount(gateway: EngineGateway, config: ConsoleConfig):
     mcp = _build_http_mcp(gateway, config.mcp_allowed_hosts)
     inner = mcp.streamable_http_app()
     session_manager = mcp.session_manager  # initializes it on the inner app
-    expected = f"Bearer {config.api_key}"
+    # None when no api_key is configured, so the constant-time compare below
+    # always fails (compare_digest is skipped for a None expected value).
+    expected = f"Bearer {config.api_key}" if config.api_key else None
 
     async def gated(scope, receive, send):
         if scope["type"] != "http":
@@ -147,7 +150,8 @@ def build_mcp_mount(gateway: EngineGateway, config: ConsoleConfig):
             return
         headers = dict(scope.get("headers") or [])
         auth = headers.get(b"authorization", b"").decode()
-        if not config.api_key or auth != expected:
+        # Constant-time bearer compare; both sides must be non-None strings.
+        if expected is None or not secrets.compare_digest(auth, expected):
             await _send_401(send)
             return
         await inner(scope, receive, send)
