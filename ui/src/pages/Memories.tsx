@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { listFacts, listNamespaces } from "../api";
 import type { Fact, TopPredicate } from "../types";
 import type { FactFilters } from "../api";
@@ -57,8 +57,9 @@ export default function Memories({ ns }: { ns: string }) {
     };
   }, [ns]);
 
-  const load = useCallback(() => {
+  useEffect(() => {
     if (!ns) return;
+    let cancelled = false;
     setLoading(true);
     setError(null);
     const params: FactFilters = {
@@ -73,16 +74,20 @@ export default function Memories({ ns }: { ns: string }) {
     };
     listFacts(ns, params)
       .then((env) => {
+        if (cancelled) return;
         setRows(env.items);
         setTotal(env.total);
       })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [ns, applied, page]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
 
   function applyFilters() {
     setApplied(filters);
