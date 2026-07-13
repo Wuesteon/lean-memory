@@ -29,9 +29,10 @@ function Card({ ns }: { ns: NamespaceCard }) {
         <span className="text-xs text-slate-400">{formatBytes(ns.file_size)}</span>
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-5 gap-3">
         <Stat label="facts (latest)" value={formatCount(ns.facts_latest)} />
         <Stat label="retired" value={formatCount(ns.facts_retired)} />
+        <Stat label="chains" value={formatCount(ns.chains)} />
         <Stat label="episodes" value={formatCount(ns.episodes)} />
         <Stat label="entities" value={formatCount(ns.entities)} />
       </div>
