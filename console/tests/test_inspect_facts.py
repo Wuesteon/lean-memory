@@ -69,6 +69,27 @@ def test_list_facts_envelope_total_is_post_filter(alpha_db):
     assert one["total"] <= allf["total"]
 
 
+def test_list_facts_q_with_operator_keyword_does_not_raise(alpha_db):
+    # FTS5 treats the bare uppercase tokens AND/OR/NOT/NEAR as operators, so an
+    # unquoted OR-query built from "acme AND globex" becomes the malformed
+    # 'acme OR AND OR globex' and raises. _fts_query must QUOTE each term
+    # (mirroring the engine) so a user query containing such a token never
+    # raises and still returns the envelope.
+    out = inspect_sql.list_facts(alpha_db, latest_only=False, q="acme OR globex")
+    assert set(out) == {"items", "page", "page_size", "total"}
+    assert out["total"] >= 1  # matches the retired "Acme" and latest "Globex"
+
+    # AND and NOT are operators too — the fixture-free path still must not raise.
+    both = inspect_sql.list_facts(alpha_db, latest_only=False, q="coffee AND tea")
+    assert set(both) == {"items", "page", "page_size", "total"}
+    assert both["total"] == 0  # neither token is in the fixture
+
+    # a bare operator keyword ALONE must also be inert (quoted string literal).
+    only_kw = inspect_sql.list_facts(alpha_db, latest_only=False, q="NEAR")
+    assert set(only_kw) == {"items", "page", "page_size", "total"}
+    assert only_kw["total"] == 0  # "NEAR" is not a token in the fixture
+
+
 def test_get_fact_chain_oldest_to_newest(alpha_db):
     # find the retired fact (has superseded_by) then fetch the latest head
     allf = inspect_sql.list_facts(alpha_db, latest_only=False)

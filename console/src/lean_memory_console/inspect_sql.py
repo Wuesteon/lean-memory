@@ -33,14 +33,19 @@ def open_ro(path: Path) -> sqlite3.Connection:
 
 
 def _fts_query(text: str) -> str:
-    """OR-query of bare alnum terms (mirrors engine sqlite_store._fts_query so
-    the console's text filter matches the same tokens the engine indexes)."""
+    """OR-query of QUOTED alnum terms (mirrors engine sqlite_store._fts_query so
+    the console's text filter matches the same tokens the engine indexes).
+
+    Quoting matters: FTS5 treats bare AND/OR/NOT/NEAR as operators, so an
+    unquoted query with such a token raises a syntax error. A quoted term is an
+    inert string literal, still matched case-insensitively by the tokenizer;
+    terms are alnum-only after the scrub, so no embedded quote can break out."""
     terms = [
         t for t in "".join(c if c.isalnum() else " " for c in text).split() if t
     ]
     if not terms:
         return '""'
-    return " OR ".join(terms)
+    return " OR ".join(f'"{t}"' for t in terms)
 
 
 def list_namespaces(data_root: Path, event_log) -> list[dict]:
