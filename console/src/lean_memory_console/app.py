@@ -8,15 +8,18 @@ Host header (DNS-rebinding belt-and-suspenders).
 
 from __future__ import annotations
 
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import ConsoleConfig
 from .engine import EngineGateway
 from .events import EventLog
+from .routes.data import build_data_router
+from .routes.mcp import build_mcp_mount
 from .routes.views import build_views_router
 
 # Loopback hostnames accepted in local mode (DNS-rebinding guard). Exact-match
@@ -48,7 +51,22 @@ def create_app(
     gateway: EngineGateway,
     event_log: EventLog,
 ) -> FastAPI:
-    app = FastAPI(title="lean-memory-console")
+    # In Docker mode, build the streamable-HTTP MCP mount up front so its
+    # stateless session manager can be driven by the app lifespan (the correct
+    # start path under a real ASGI server; the mount also self-starts per
+    # request for drivers that do not forward lifespan to mounted sub-apps).
+    mcp_mount = (
+        build_mcp_mount(gateway, config) if config.mode == "docker" else None
+    )
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        async with AsyncExitStack() as stack:
+            if mcp_mount is not None:
+                await stack.enter_async_context(mcp_mount.session_manager.run())
+            yield
+
+    app = FastAPI(title="lean-memory-console", lifespan=_lifespan)
     app.state.config = config
     app.state.gateway = gateway
     app.state.event_log = event_log
@@ -70,7 +88,17 @@ def create_app(
         return response
 
     app.include_router(build_views_router())
+    # /v1/* are POST handlers reading app.state.gateway; gate the whole router
+    # with the same auth dependency (local token / docker bearer).
+    app.include_router(
+        build_data_router(), dependencies=[Depends(require_auth)]
+    )
 
+    if mcp_mount is not None:
+        app.mount("/mcp", mcp_mount)
+
+    # The SPA catch-all must be the LAST mount so it never shadows /v1, /views,
+    # or /mcp.
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
         app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="spa")
