@@ -254,3 +254,39 @@ def test_mcp_unlisted_remote_host_rejected(tmp_path):
         mcp_allowed_hosts=[],
     )
     assert unlisted == 421
+
+
+def test_static_mount_does_not_shadow_mcp(tmp_path, monkeypatch):
+    # Regression: the SPA StaticFiles mount at "/" serves only GET/HEAD and 405s
+    # every other method on any path it matches. If it is registered before /mcp
+    # (or if a bare POST /mcp is not redirected past it), POST /mcp returns 405
+    # instead of the bearer gate's 401. This pins the ordering + slash-redirect
+    # with a real static dir present, independent of the UI build.
+    import lean_memory_console.app as appmod
+
+    spa = tmp_path / "spa"
+    spa.mkdir()
+    (spa / "index.html").write_text("<!doctype html><title>console</title>ok")
+    monkeypatch.setattr(appmod, "_static_dir", lambda: spa)
+
+    root = tmp_path / "data"
+    root.mkdir()
+    cfg = ConsoleConfig(data_root=root, mode="docker", models="stub", api_key="k")
+    log = EventLog(root)
+    gw = EngineGateway(cfg, log)
+    app = create_app(cfg, gw, log)
+    try:
+        with TestClient(app, base_url="http://127.0.0.1") as client:
+            # POST /mcp without a bearer must reach the gate (401), NOT be
+            # swallowed by StaticFiles (405).
+            r = client.post(
+                "/mcp", json={"jsonrpc": "2.0", "method": "ping", "id": 1}
+            )
+            assert r.status_code == 401
+            # The SPA is genuinely mounted and served at "/".
+            index = client.get("/")
+            assert index.status_code == 200
+            assert "console" in index.text
+    finally:
+        gw.close()
+        log.close()

@@ -12,7 +12,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import ConsoleConfig
@@ -25,6 +25,13 @@ from .routes.views import build_views_router
 # Loopback hostnames accepted in local mode (DNS-rebinding guard). Exact-match
 # only: a startswith check would wrongly admit e.g. "localhost.attacker.com".
 _ALLOWED_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
+
+
+def _static_dir() -> Path:
+    """Directory of the built SPA (populated by the UI build). A seam so the
+    static-mount-ordering regression can be tested hermetically regardless of
+    whether the UI build has materialized ``static/`` on disk."""
+    return Path(__file__).parent / "static"
 
 
 def _is_authenticated(request: Request, config: ConsoleConfig) -> bool:
@@ -96,11 +103,24 @@ def create_app(
     )
 
     if mcp_mount is not None:
+        # A Starlette Mount("/mcp") only matches "/mcp/..." — a bare "/mcp"
+        # (what real MCP clients POST to, per the connect snippet) is NOT matched
+        # by the mount. Without a static "/" mount, Starlette's slash-redirect
+        # fallback used to bounce "/mcp" -> "/mcp/". But the greedy StaticFiles
+        # mount at "/" matches "/mcp" first and 405s every non-GET method before
+        # that fallback can run. Register an explicit 307 (method+body preserving)
+        # from "/mcp" to "/mcp/" so a bare POST reaches the bearer gate whether or
+        # not the SPA is present.
+        @app.post("/mcp", include_in_schema=False)
+        async def _mcp_slash_redirect() -> RedirectResponse:
+            return RedirectResponse(url="/mcp/", status_code=307)
+
         app.mount("/mcp", mcp_mount)
 
-    # The SPA catch-all must be the LAST mount so it never shadows /v1, /views,
-    # or /mcp.
-    static_dir = Path(__file__).parent / "static"
+    # The SPA catch-all MUST be registered LAST so its greedy "/" mount never
+    # shadows /v1, /views, or /mcp (StaticFiles serves only GET/HEAD and 405s
+    # every other method on any path it matches).
+    static_dir = _static_dir()
     if static_dir.is_dir():
         app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="spa")
 
