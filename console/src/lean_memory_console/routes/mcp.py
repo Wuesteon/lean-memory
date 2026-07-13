@@ -1,29 +1,45 @@
 """Docker-mode streamable-HTTP MCP mount (/mcp) with bearer auth.
 
 The wrapper FastMCP is built stateless (json_response) so its Starlette app
-mounts into FastAPI without a long-lived session-manager lifespan of its own. A
-thin ASGI wrapper enforces ``Authorization: Bearer <api_key>`` before delegating;
-full MCP-over-HTTP round-trips are exercised in the manual E2E, not here.
+mounts into FastAPI without needing to own the server process. A thin ASGI
+wrapper enforces ``Authorization: Bearer <api_key>`` before delegating; full
+MCP-over-HTTP round-trips are exercised in the manual E2E (and, since the review,
+in a two-request automated test).
 
-Two SDK-1.28.1 adaptations from the brief's skeleton, both minimal and disclosed:
+Two SDK-1.28.1 decisions, both disclosed:
 
-1. Session-manager task group. ``streamable_http_app().handle_request`` raises
+1. Session-manager lifecycle — LIFESPAN ONLY.
+   ``streamable_http_app().handle_request`` raises
    ``RuntimeError("Task group is not initialized. Make sure to use run().")``
-   unless ``StreamableHTTPSessionManager.run()`` has been entered — even in
-   stateless mode. When this ASGI app is *mounted* (``app.mount``) rather than
-   included, FastAPI does not forward lifespan events to it, so the inner app's
-   own lifespan never fires. We therefore start the manager per request, inside
-   the same task that serves it, when its task group is not already running (an
-   anyio task group must be entered and exited in the same task, so a persistent
-   cross-task start is not viable under a bare/portal ASGI driver). Under a real
-   ASGI server the console's lifespan (``create_app``) enters ``run()`` once and
-   the per-request guard becomes a no-op.
+   until ``StreamableHTTPSessionManager.run()`` has been entered — even in
+   stateless mode. ``run()`` may be entered EXACTLY ONCE per instance: it sets
+   ``_has_started`` permanently and raises on a second call, and on exit it
+   resets ``_task_group`` to ``None`` (verified in the installed SDK at
+   ``mcp/server/streamable_http_manager.py``). A per-request self-start is
+   therefore broken beyond the first request. We expose ``session_manager`` and
+   the console's app lifespan (``app.create_app``) enters ``run()`` once for the
+   process lifetime. Consequence: tests that hit ``/mcp`` MUST drive the lifespan
+   — use ``with TestClient(app) as client:`` (a bare ``TestClient(app)`` does not
+   run the lifespan and would 500 on the first authenticated request).
 
-2. Transport security. FastMCP defaults to DNS-rebinding protection that rejects
-   any Host header not on its allow-list (127.0.0.1/localhost) with 421. The
-   console applies its own Host guard in local mode and Docker mode runs behind
-   the deployment's own boundary, so we disable the inner check to keep the mount
-   reachable through the mount point's rewritten Host.
+2. Transport security — DNS-rebinding protection ENABLED with a loopback
+   allow-list.
+   FastMCP validates Host and Origin headers to defeat DNS rebinding. The SDK
+   couples both checks behind a single ``enable_dns_rebinding_protection`` flag
+   and offers no host wildcard — only exact matches and ``base:*`` port patterns
+   (see ``mcp/server/transport_security.py``). We enable protection and
+   enumerate the loopback host/origin values a legitimate console client
+   presents. This gives real Origin restriction (a cross-site Origin → 403) while
+   the bearer gate in front remains the primary access control.
+
+   Docker deployments reached via an ARBITRARY published hostname will have that
+   hostname in the Host header, which the SDK cannot allow-list by wildcard, so
+   such requests are rejected with 421. Front the container with a reverse proxy
+   that presents a known/loopback Host (or extend ``allowed_hosts`` for the
+   deployment's fixed hostname). We keep the narrow loopback allow-list rather
+   than disabling protection outright, because disabling the flag also disables
+   the Origin check — losing the one control that actually matters for a
+   browser-originated DNS-rebinding attack.
 """
 
 from __future__ import annotations
@@ -36,6 +52,25 @@ from mcp.server.transport_security import TransportSecuritySettings
 from ..config import ConsoleConfig
 from ..engine import EngineGateway
 
+# Loopback host/origin allow-list for the inner MCP transport-security check.
+# Host entries use the SDK's exact + ``base:*`` port-wildcard matching; there is
+# no host wildcard, so arbitrary external Docker hostnames are intentionally not
+# covered (see the module docstring, decision 2).
+_ALLOWED_HOSTS = [
+    "127.0.0.1",
+    "127.0.0.1:*",
+    "localhost",
+    "localhost:*",
+    "[::1]",
+    "[::1]:*",
+]
+_ALLOWED_ORIGINS = [
+    "http://127.0.0.1",
+    "http://127.0.0.1:*",
+    "http://localhost",
+    "http://localhost:*",
+]
+
 
 def _build_http_mcp(gateway: EngineGateway) -> FastMCP:
     mcp = FastMCP(
@@ -44,7 +79,9 @@ def _build_http_mcp(gateway: EngineGateway) -> FastMCP:
         json_response=True,
         streamable_http_path="/",
         transport_security=TransportSecuritySettings(
-            enable_dns_rebinding_protection=False
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=_ALLOWED_HOSTS,
+            allowed_origins=_ALLOWED_ORIGINS,
         ),
     )
 
@@ -84,10 +121,10 @@ def build_mcp_mount(gateway: EngineGateway, config: ConsoleConfig):
     """Return an ASGI app: bearer gate -> streamable-HTTP MCP app.
 
     Mount at "/mcp"; the inner MCP app serves at its own root "/" once mounted
-    (FastMCP's streamable_http_path is set to "/" so it resolves at exactly the
-    mount point). The returned app exposes ``session_manager`` so the caller can
-    enter its ``run()`` in the app lifespan; absent that, each request starts the
-    manager for its own duration.
+    (FastMCP's ``streamable_http_path`` is "/" so it resolves at exactly the
+    mount point). The returned app exposes ``session_manager``; the caller MUST
+    enter its ``run()`` in the app lifespan (see module docstring, decision 1) —
+    there is no per-request fallback, because ``run()`` is once-only per instance.
     """
     mcp = _build_http_mcp(gateway)
     inner = mcp.streamable_http_app()
@@ -103,17 +140,10 @@ def build_mcp_mount(gateway: EngineGateway, config: ConsoleConfig):
         if not config.api_key or auth != expected:
             await _send_401(send)
             return
-        # Start the stateless session manager for this request if the app
-        # lifespan has not already started it (mounted apps get no lifespan).
-        if session_manager._task_group is None:
-            async with session_manager.run():
-                await inner(scope, receive, send)
-        else:
-            await inner(scope, receive, send)
+        await inner(scope, receive, send)
 
-    # Expose the manager so create_app can drive it via the app lifespan under a
-    # real ASGI server (uvicorn); the per-request start above covers drivers
-    # that do not forward lifespan to mounted sub-apps (e.g. bare TestClient).
+    # Exposed so create_app can drive the once-only session manager via the app
+    # lifespan (the only supported start path).
     gated.session_manager = session_manager
     return gated
 

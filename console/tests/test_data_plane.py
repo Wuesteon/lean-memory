@@ -20,7 +20,10 @@ def docker(tmp_path):
     gw = EngineGateway(cfg, log)
     app = create_app(cfg, gw, log)
     client = TestClient(app)
-    yield cfg, client, root
+    # `app` is yielded too so the /mcp tests can open a context-managed client
+    # (`with TestClient(app) as c:`) that runs the app lifespan — the MCP session
+    # manager is once-only and is started there, not per request.
+    yield cfg, client, root, app
     gw.close()
     log.close()
 
@@ -29,7 +32,7 @@ AUTH = {"Authorization": "Bearer k"}
 
 
 def test_add_search_roundtrip(docker):
-    _cfg, client, _root = docker
+    _cfg, client, _root, _app = docker
     r = client.post(
         "/v1/proj/memories",
         headers=AUTH,
@@ -59,7 +62,7 @@ def test_add_search_roundtrip(docker):
 
 
 def test_t_ref_to_valid_at(docker):
-    _cfg, client, root = docker
+    _cfg, client, root, _app = docker
     t_ref = 1_600_000_000_000
     r = client.post(
         "/v1/proj/memories",
@@ -80,7 +83,7 @@ def test_t_ref_to_valid_at(docker):
 
 
 def test_latest_only_flag_honored(docker):
-    _cfg, client, _root = docker
+    _cfg, client, _root, _app = docker
     client.post(
         "/v1/proj/memories", headers=AUTH,
         json={"text": "The user lives in Rome."},
@@ -101,7 +104,7 @@ def test_latest_only_flag_honored(docker):
 
 
 def test_reserved_ns_404(docker):
-    _cfg, client, _root = docker
+    _cfg, client, _root, _app = docker
     r = client.post(
         "/v1/_events/memories", headers=AUTH, json={"text": "x"}
     )
@@ -109,33 +112,82 @@ def test_reserved_ns_404(docker):
 
 
 def test_bearer_required(docker):
-    _cfg, client, _root = docker
+    _cfg, client, _root, _app = docker
     r = client.post("/v1/proj/memories", json={"text": "x"})
     assert r.status_code == 401
 
 
 def test_validation_422(docker):
-    _cfg, client, _root = docker
+    _cfg, client, _root, _app = docker
     r = client.post("/v1/proj/memories", headers=AUTH, json={})
     assert r.status_code == 422
 
 
 def test_mcp_mount_unauthorized_401(docker):
-    _cfg, client, _root = docker
-    # No Authorization header -> the ASGI bearer wrapper rejects before MCP.
-    r = client.post("/mcp", json={"jsonrpc": "2.0", "method": "ping", "id": 1})
+    _cfg, _client, _root, app = docker
+    # The bearer gate rejects before any MCP handling; a context-managed client
+    # runs the app lifespan (which starts the once-only MCP session manager).
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        r = client.post(
+            "/mcp", json={"jsonrpc": "2.0", "method": "ping", "id": 1}
+        )
     assert r.status_code == 401
 
 
 def test_mcp_mount_exists(docker):
-    _cfg, client, _root = docker
-    # With a valid bearer the wrapper delegates to the MCP app (which then
-    # applies its own protocol handling). We assert only that the bearer
-    # wrapper does NOT 401 — full MCP-over-HTTP round-trip is deferred to the
-    # manual E2E (see the note at the end of this task).
-    r = client.post(
-        "/mcp",
-        headers={"Authorization": "Bearer k", "Accept": "application/json, text/event-stream"},
-        json={"jsonrpc": "2.0", "method": "ping", "id": 1},
-    )
-    assert r.status_code != 401
+    _cfg, _client, _root, app = docker
+    # A valid bearer delegates to the MCP app. Two SEQUENTIAL authenticated
+    # requests guard the once-only-run() regression: the session manager is
+    # started once by the app lifespan (not per request), so a second call must
+    # still succeed. Both must NOT 401; a full protocol round-trip is still the
+    # manual E2E's job, but here initialize + tools/list both return 200.
+    hdrs = {
+        "Authorization": "Bearer k",
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        r1 = client.post(
+            "/mcp",
+            headers=hdrs,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "1"},
+                },
+            },
+        )
+        r2 = client.post(
+            "/mcp",
+            headers=hdrs,
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        )
+    assert r1.status_code != 401
+    assert r2.status_code != 401
+    # The second request proves run() was not re-entered per request.
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+
+
+def test_mcp_mount_rejects_cross_site_origin(docker):
+    _cfg, _client, _root, app = docker
+    # Transport security is enabled with a loopback allow-list: a bearer-valid
+    # request bearing a disallowed cross-site Origin is rejected by the inner
+    # MCP app (403), proving DNS-rebinding protection is active, not disabled.
+    hdrs = {
+        "Authorization": "Bearer k",
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "Origin": "http://evil.example",
+    }
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        r = client.post(
+            "/mcp",
+            headers=hdrs,
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+    assert r.status_code == 403

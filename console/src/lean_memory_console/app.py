@@ -52,9 +52,10 @@ def create_app(
     event_log: EventLog,
 ) -> FastAPI:
     # In Docker mode, build the streamable-HTTP MCP mount up front so its
-    # stateless session manager can be driven by the app lifespan (the correct
-    # start path under a real ASGI server; the mount also self-starts per
-    # request for drivers that do not forward lifespan to mounted sub-apps).
+    # once-only session manager can be started by the app lifespan below — the
+    # only supported start path (run() cannot be re-entered per request). Under a
+    # real ASGI server (uvicorn) the lifespan runs; tests hitting /mcp must use a
+    # context-managed TestClient so the lifespan runs there too.
     mcp_mount = (
         build_mcp_mount(gateway, config) if config.mode == "docker" else None
     )
