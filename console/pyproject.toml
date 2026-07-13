@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "httpx", "pyyaml"]
+dev = ["pytest>=8", "anyio>=4", "httpx>=0.27", "pyyaml"]
 
 [project.scripts]
 lean-memory-console = "lean_memory_console.cli:main"
