@@ -39,7 +39,9 @@ export interface NamespaceCard {
 }
 
 export interface Fact {
-  fact_id: string;
+  // Raw DB rows serialize the primary key as `id`; only test-search hits use
+  // `fact_id` (the gateway renames it — see SearchHit).
+  id: string;
   fact_text: string;
   subject: string | null;
   predicate: string;
@@ -56,7 +58,7 @@ export interface Fact {
 }
 
 export interface ChainLink {
-  fact_id: string;
+  id: string;
   fact_text: string;
   valid_at: number;
   valid_to: number | null;
