@@ -1,6 +1,6 @@
 # lean-memory
 
-[![test](https://github.com/Wuesteon/lean-memory/actions/workflows/test.yml/badge.svg)](https://github.com/Wuesteon/lean-memory/actions/workflows/test.yml)
+[![test](https://github.com/Wuesteon/lean-memory/actions/workflows/test.yml/badge.svg)](https://github.com/Wuesteon/lean-memory/actions/workflows/test.yml) [![PyPI](https://img.shields.io/pypi/v/lean-memory)](https://pypi.org/project/lean-memory/) [![Wuesteon/lean-memory MCP server](https://glama.ai/mcp/servers/Wuesteon/lean-memory/badges/score.svg)](https://glama.ai/mcp/servers/Wuesteon/lean-memory)
 
 Embedded, local-first agent memory. No server, no daemon, no mandatory cloud key.
 
