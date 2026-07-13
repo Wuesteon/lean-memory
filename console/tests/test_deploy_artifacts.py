@@ -35,6 +35,22 @@ def test_dockerfile_copies_built_static_from_bun_stage() -> None:
     assert "static" in text
 
 
+def test_dockerfile_cmd_selects_docker_mode() -> None:
+    # The container entrypoint MUST pass --docker so serve loads Docker mode
+    # (bearer auth, 0.0.0.0 bind, /mcp mount). Without it the image silently
+    # runs in local mode: LM_API_KEY ignored, /mcp never mounted, LAN clients
+    # 403'd by the local Host guard.
+    text = DOCKERFILE.read_text()
+    cmd_lines = [
+        ln for ln in text.splitlines()
+        if ln.startswith("CMD") and "lean-memory-console" in ln
+    ]
+    assert cmd_lines, "expected a CMD launching lean-memory-console"
+    assert all("serve" in ln and "--docker" in ln for ln in cmd_lines), (
+        "the container CMD must run `serve --docker`"
+    )
+
+
 def test_compose_targets_full_and_requires_api_key() -> None:
     data = yaml.safe_load(COMPOSE.read_text())
     svc = data["services"]["console"]

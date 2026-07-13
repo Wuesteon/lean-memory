@@ -57,9 +57,10 @@ PY
 RUN rm -rf /tmp/spa
 VOLUME ["/data"]
 EXPOSE 8377
-# Docker mode: the app serves the console UI + data plane; LM_API_KEY required
-# (boot validation in cli.py refuses to start without it).
-CMD ["lean-memory-console", "serve", "--root", "/data", "--no-open"]
+# Docker mode (explicit --docker flag, no env-based magic): the app serves the
+# console UI + data plane + /mcp mount under bearer auth, bound on 0.0.0.0.
+# LM_API_KEY is required — boot validation in cli.py refuses to start without it.
+CMD ["lean-memory-console", "serve", "--docker", "--root", "/data", "--no-open"]
 
 # ── full runtime (real models) ───────────────────────────────────────────
 FROM slim AS full

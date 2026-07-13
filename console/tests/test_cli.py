@@ -110,3 +110,96 @@ def test_serve_boot_ok_readable_root(tmp_path, monkeypatch):
     rc = cli.main(["serve", "--root", str(tmp_path), "--no-open", "--port", "9999"])
     assert rc == 0
     assert started["port"] == 9999
+
+
+def test_serve_default_is_local_mode(tmp_path, monkeypatch):
+    # Without --docker, serve must load LOCAL mode (per-launch token, no bearer).
+    monkeypatch.setenv("LM_DATA_ROOT", str(tmp_path))
+    captured = {}
+    monkeypatch.setattr(cli, "_run_server", lambda config, no_open: captured.update(mode=config.mode))
+    rc = cli.main(["serve", "--root", str(tmp_path), "--no-open"])
+    assert rc == 0
+    assert captured["mode"] == "local"
+
+
+def test_serve_docker_requires_api_key(tmp_path, monkeypatch):
+    # `serve --docker` without LM_API_KEY must fail fast with exit 2 (the same
+    # boot validation load_config('docker') enforces) — the container refuses
+    # to start rather than silently running unauthenticated.
+    monkeypatch.delenv("LM_API_KEY", raising=False)
+    monkeypatch.setenv("LM_DATA_ROOT", str(tmp_path))
+    # _run_server must NOT be reached; if boot validation regresses this fails loud.
+    monkeypatch.setattr(
+        cli, "_run_server",
+        lambda *a, **k: pytest.fail("serve --docker booted without LM_API_KEY"),
+    )
+    with pytest.raises(SystemExit) as ei:
+        cli.main(["serve", "--docker", "--root", str(tmp_path), "--no-open"])
+    assert ei.value.code == 2
+
+
+def test_serve_docker_loads_docker_mode_config(tmp_path, monkeypatch):
+    # With LM_API_KEY set, `serve --docker` hands _run_server a docker-mode config.
+    monkeypatch.setenv("LM_API_KEY", "secret-xyz")
+    monkeypatch.setenv("LM_DATA_ROOT", str(tmp_path))
+    captured = {}
+
+    def fake_serve(config, no_open):
+        captured["mode"] = config.mode
+        captured["api_key"] = config.api_key
+        captured["session_token"] = config.session_token
+
+    monkeypatch.setattr(cli, "_run_server", fake_serve)
+    rc = cli.main(["serve", "--docker", "--root", str(tmp_path), "--no-open"])
+    assert rc == 0
+    assert captured["mode"] == "docker"
+    assert captured["api_key"] == "secret-xyz"
+    assert captured["session_token"] is None  # no per-launch token in docker mode
+
+
+def test_run_server_binds_0_0_0_0_in_docker_mode(tmp_path, monkeypatch):
+    # _run_server derives the bind host from config.mode: docker -> 0.0.0.0 so the
+    # container is reachable via published ports (the local Host guard does not
+    # run in docker mode; bearer + MCP allowlist are the controls). Local stays
+    # loopback. Assert the host actually handed to uvicorn.run.
+    #
+    # _run_server does *function-local* imports (import uvicorn; from .app import
+    # create_app; from .engine import EngineGateway; from .events import
+    # EventLog), so patch each at its source module / sys.modules.
+    import sys
+    import types
+
+    import lean_memory_console.app as app_mod
+    import lean_memory_console.cli as cli_mod
+    import lean_memory_console.engine as engine_mod
+    import lean_memory_console.events as events_mod
+    from lean_memory_console.config import ConsoleConfig
+
+    captured = {}
+
+    fake_uvicorn = types.ModuleType("uvicorn")
+    fake_uvicorn.run = lambda app, host, port, log_level: captured.update(host=host)
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+
+    class _Noop:
+        def __init__(self, *a, **k):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(engine_mod, "EngineGateway", _Noop)
+    monkeypatch.setattr(events_mod, "EventLog", _Noop)
+    monkeypatch.setattr(app_mod, "create_app", lambda *a, **k: object())
+
+    docker_cfg = ConsoleConfig(
+        data_root=tmp_path, mode="docker", api_key="k", port=8377, session_token=None
+    )
+    cli_mod._run_server(docker_cfg, no_open=True)
+    assert captured["host"] == "0.0.0.0"
+
+    local_cfg = ConsoleConfig(
+        data_root=tmp_path, mode="local", api_key=None, port=8377, session_token="tok"
+    )
+    cli_mod._run_server(local_cfg, no_open=True)
+    assert captured["host"] == "127.0.0.1"
