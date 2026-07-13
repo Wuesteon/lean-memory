@@ -12,7 +12,7 @@ import os
 import re
 import secrets
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # Mirror of engine memory.py:38  _SAFE_NS = re.compile(r"[^A-Za-z0-9_.-]")
@@ -49,6 +49,18 @@ def resolve_data_root(cli_root: str | None) -> Path:
     return DEFAULT_DATA_ROOT.expanduser()
 
 
+def parse_allowed_hosts(raw: str | None) -> list[str]:
+    """Parse LM_MCP_ALLOWED_HOSTS (comma-separated host patterns) into a list.
+
+    Whitespace around each entry is stripped and empty entries dropped, so
+    "a:*, b:*" and "a:*,,b:*" both yield ["a:*", "b:*"]. None/empty → []. The
+    patterns are consumed verbatim by the MCP transport-security allow-list
+    (exact match or a trailing ":*" port wildcard — see routes/mcp.py)."""
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
 @dataclass
 class ConsoleConfig:
     data_root: Path
@@ -57,6 +69,10 @@ class ConsoleConfig:
     port: int = DEFAULT_PORT
     models: str = "auto"  # "auto" | "stub"
     session_token: str | None = None
+    # Docker mode only: extra Host patterns the MCP mount accepts, ADDED to the
+    # loopback defaults. Set via LM_MCP_ALLOWED_HOSTS so a container published on
+    # a LAN IP/hostname (the shipped compose flow, no reverse proxy) is reachable.
+    mcp_allowed_hosts: list[str] = field(default_factory=list)
 
 
 def load_config(
@@ -89,6 +105,9 @@ def load_config(
             port=resolved_port,
             models=models,
             session_token=None,
+            mcp_allowed_hosts=parse_allowed_hosts(
+                os.environ.get("LM_MCP_ALLOWED_HOSTS")
+            ),
         )
 
     # local mode

@@ -145,6 +145,11 @@ Ground truth baked from source (do not re-derive):
         - LM_DATA_ROOT=/data
         - PORT=8377
         - LM_CONSOLE_MODELS=auto
+        # Remote-host deployments (reached over the LAN, no reverse proxy) must
+        # list the hostname(s)/IP(s) the container is reached by, or the MCP mount
+        # 421s on the Host check. Comma-separated; ":*" matches any port. The
+        # bearer gate (LM_API_KEY) remains the primary access control.
+        # - LM_MCP_ALLOWED_HOSTS=myhost:*
       volumes:
         - lm_data:/data
         - hf_cache:/root/.cache/huggingface
@@ -6099,6 +6104,11 @@ Reference facts baked in from source (verified during planning):
         - LM_DATA_ROOT=/data
         - PORT=8377
         - LM_CONSOLE_MODELS=auto
+        # Remote-host deployments (reached over the LAN, no reverse proxy) must
+        # list the hostname(s)/IP(s) the container is reached by, or the MCP mount
+        # 421s on the Host check. Comma-separated; ":*" matches any port. The
+        # bearer gate (LM_API_KEY) remains the primary access control.
+        # - LM_MCP_ALLOWED_HOSTS=myhost:*
       volumes:
         - lm_data:/data
         - hf_cache:/root/.cache/huggingface

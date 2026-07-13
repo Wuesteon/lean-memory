@@ -23,23 +23,25 @@ Two SDK-1.28.1 decisions, both disclosed:
    run the lifespan and would 500 on the first authenticated request).
 
 2. Transport security — DNS-rebinding protection ENABLED with a loopback
-   allow-list.
+   default allow-list, extendable via ``LM_MCP_ALLOWED_HOSTS``.
    FastMCP validates Host and Origin headers to defeat DNS rebinding. The SDK
    couples both checks behind a single ``enable_dns_rebinding_protection`` flag
    and offers no host wildcard — only exact matches and ``base:*`` port patterns
-   (see ``mcp/server/transport_security.py``). We enable protection and
-   enumerate the loopback host/origin values a legitimate console client
-   presents. This gives real Origin restriction (a cross-site Origin → 403) while
-   the bearer gate in front remains the primary access control.
+   (see ``mcp/server/transport_security.py``). We enable protection and enumerate
+   the loopback host/origin values a legitimate local client presents. This gives
+   real Origin restriction (a cross-site Origin → 403) while the bearer gate in
+   front remains the primary access control.
 
-   Docker deployments reached via an ARBITRARY published hostname will have that
-   hostname in the Host header, which the SDK cannot allow-list by wildcard, so
-   such requests are rejected with 421. Front the container with a reverse proxy
-   that presents a known/loopback Host (or extend ``allowed_hosts`` for the
-   deployment's fixed hostname). We keep the narrow loopback allow-list rather
-   than disabling protection outright, because disabling the flag also disables
-   the Origin check — losing the one control that actually matters for a
-   browser-originated DNS-rebinding attack.
+   The shipped ``deploy/docker-compose.yml`` publishes 8377 directly (no reverse
+   proxy in the stack), so a container reached over the LAN presents a Host like
+   ``192.168.1.10:8377`` or ``myserver:8377`` that the loopback default does not
+   cover — it would 421. Remote-host deployments therefore set
+   ``LM_MCP_ALLOWED_HOSTS`` (comma-separated host patterns, e.g.
+   ``192.168.1.10:*,myserver:*``, parsed in ``config.py``); those patterns are
+   ADDED to the loopback defaults here. Origins stay restricted to loopback. We
+   extend rather than disable the flag, because disabling it also disables the
+   Origin check — losing the one control that matters for a browser-originated
+   DNS-rebinding attack. The bearer gate remains the primary control regardless.
 """
 
 from __future__ import annotations
@@ -52,11 +54,11 @@ from mcp.server.transport_security import TransportSecuritySettings
 from ..config import ConsoleConfig
 from ..engine import EngineGateway
 
-# Loopback host/origin allow-list for the inner MCP transport-security check.
-# Host entries use the SDK's exact + ``base:*`` port-wildcard matching; there is
-# no host wildcard, so arbitrary external Docker hostnames are intentionally not
-# covered (see the module docstring, decision 2).
-_ALLOWED_HOSTS = [
+# Loopback host/origin default allow-list for the inner MCP transport-security
+# check. Host entries use the SDK's exact + ``base:*`` port-wildcard matching;
+# there is no host wildcard, so remote deployments extend this list via
+# LM_MCP_ALLOWED_HOSTS (see the module docstring, decision 2).
+_DEFAULT_ALLOWED_HOSTS = [
     "127.0.0.1",
     "127.0.0.1:*",
     "localhost",
@@ -72,7 +74,15 @@ _ALLOWED_ORIGINS = [
 ]
 
 
-def _build_http_mcp(gateway: EngineGateway) -> FastMCP:
+def _build_http_mcp(
+    gateway: EngineGateway, extra_allowed_hosts: list[str] | None = None
+) -> FastMCP:
+    # Loopback defaults + any operator-supplied patterns (LM_MCP_ALLOWED_HOSTS),
+    # de-duplicated while preserving order.
+    allowed_hosts = list(_DEFAULT_ALLOWED_HOSTS)
+    for host in extra_allowed_hosts or []:
+        if host not in allowed_hosts:
+            allowed_hosts.append(host)
     mcp = FastMCP(
         "lean-memory-console",
         stateless_http=True,
@@ -80,7 +90,7 @@ def _build_http_mcp(gateway: EngineGateway) -> FastMCP:
         streamable_http_path="/",
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
-            allowed_hosts=_ALLOWED_HOSTS,
+            allowed_hosts=allowed_hosts,
             allowed_origins=_ALLOWED_ORIGINS,
         ),
     )
@@ -126,7 +136,7 @@ def build_mcp_mount(gateway: EngineGateway, config: ConsoleConfig):
     enter its ``run()`` in the app lifespan (see module docstring, decision 1) —
     there is no per-request fallback, because ``run()`` is once-only per instance.
     """
-    mcp = _build_http_mcp(gateway)
+    mcp = _build_http_mcp(gateway, config.mcp_allowed_hosts)
     inner = mcp.streamable_http_app()
     session_manager = mcp.session_manager  # initializes it on the inner app
     expected = f"Bearer {config.api_key}"

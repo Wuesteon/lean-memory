@@ -191,3 +191,66 @@ def test_mcp_mount_rejects_cross_site_origin(docker):
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         )
     assert r.status_code == 403
+
+
+def _mcp_status_for_base_url(tmp_path, base_url, *, mcp_allowed_hosts):
+    """Build a fresh docker app (its MCP session manager is once-only, so each
+    check needs its own app) and return the /mcp status for one authenticated
+    request whose Host derives from base_url."""
+    root = tmp_path / "data"
+    root.mkdir(parents=True)
+    cfg = ConsoleConfig(
+        data_root=root,
+        mode="docker",
+        models="stub",
+        api_key="k",
+        mcp_allowed_hosts=mcp_allowed_hosts,
+    )
+    log = EventLog(root)
+    gw = EngineGateway(cfg, log)
+    app = create_app(cfg, gw, log)
+    hdrs = {
+        "Authorization": "Bearer k",
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    try:
+        with TestClient(app, base_url=base_url) as client:
+            return client.post("/mcp", headers=hdrs, json=payload).status_code
+    finally:
+        gw.close()
+        log.close()
+
+
+def test_mcp_allowed_hosts_admits_remote_host(tmp_path):
+    # LM_MCP_ALLOWED_HOSTS (here injected via ConsoleConfig.mcp_allowed_hosts)
+    # extends the loopback default so a LAN/remote Host is accepted — the shipped
+    # compose publishes 8377 directly, no reverse proxy.
+    remote = _mcp_status_for_base_url(
+        tmp_path / "remote",
+        "http://myhost:8377",
+        mcp_allowed_hosts=["myhost:*"],
+    )
+    assert remote == 200
+
+
+def test_mcp_loopback_default_still_admitted(tmp_path):
+    # The loopback default remains admitted alongside any extra pattern.
+    loopback = _mcp_status_for_base_url(
+        tmp_path / "loopback",
+        "http://127.0.0.1",
+        mcp_allowed_hosts=["myhost:*"],
+    )
+    assert loopback == 200
+
+
+def test_mcp_unlisted_remote_host_rejected(tmp_path):
+    # Without the host in the allow-list, a remote Host is rejected (421) — the
+    # loopback-only default is the safe baseline.
+    unlisted = _mcp_status_for_base_url(
+        tmp_path / "unlisted",
+        "http://myhost:8377",
+        mcp_allowed_hosts=[],
+    )
+    assert unlisted == 421

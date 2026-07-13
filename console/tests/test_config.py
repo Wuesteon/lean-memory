@@ -72,11 +72,30 @@ def test_load_config_docker_requires_api_key(monkeypatch, tmp_path):
 def test_load_config_docker_with_api_key(monkeypatch, tmp_path):
     monkeypatch.setenv("LM_DATA_ROOT", str(tmp_path))
     monkeypatch.setenv("LM_API_KEY", "secret-key")
+    monkeypatch.delenv("LM_MCP_ALLOWED_HOSTS", raising=False)
     c = cfg.load_config("docker")
     assert c.mode == "docker"
     assert c.api_key == "secret-key"
     assert c.session_token is None
     assert c.data_root == tmp_path
+    # default: no extra MCP hosts (loopback-only allow-list applies)
+    assert c.mcp_allowed_hosts == []
+
+
+def test_load_config_docker_mcp_allowed_hosts(monkeypatch, tmp_path):
+    monkeypatch.setenv("LM_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("LM_API_KEY", "secret-key")
+    monkeypatch.setenv("LM_MCP_ALLOWED_HOSTS", "192.168.1.10:*, myserver:* ,")
+    c = cfg.load_config("docker")
+    # comma-split, whitespace-stripped, empty entries dropped
+    assert c.mcp_allowed_hosts == ["192.168.1.10:*", "myserver:*"]
+
+
+def test_parse_allowed_hosts():
+    assert cfg.parse_allowed_hosts(None) == []
+    assert cfg.parse_allowed_hosts("") == []
+    assert cfg.parse_allowed_hosts("a:*") == ["a:*"]
+    assert cfg.parse_allowed_hosts("a:*, b:*,,  c ") == ["a:*", "b:*", "c"]
 
 
 def test_load_config_local_generates_session_token(monkeypatch, tmp_path):
