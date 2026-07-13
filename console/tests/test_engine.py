@@ -1,3 +1,4 @@
+import importlib
 import sqlite3
 
 import pytest
@@ -7,6 +8,8 @@ from lean_memory_console.engine import (
     AddResult,
     EngineGateway,
     SearchResult,
+    _build_memory,
+    resolved_models_mode,
     retry_busy,
 )
 from lean_memory_console.events import EventLog
@@ -14,6 +17,74 @@ from lean_memory_console.events import EventLog
 
 def _config(tmp_path):
     return ConsoleConfig(data_root=tmp_path, mode="local", models="stub")
+
+
+def _models_installed() -> bool:
+    return importlib.util.find_spec("sentence_transformers") is not None
+
+
+def test_build_memory_stub_uses_fake_embedder(tmp_path):
+    cfg = ConsoleConfig(data_root=tmp_path, mode="local", models="stub")
+    mem = _build_memory(cfg)
+    try:
+        # models="stub" always pins the deterministic offline embedder.
+        assert type(mem.embedder).__name__ == "FakeEmbedder"
+    finally:
+        mem.close()
+
+
+def test_build_memory_auto_falls_back_to_stub_when_extras_absent(tmp_path):
+    # The console venv has NO [models] extra; auto must degrade gracefully to
+    # the stub backend rather than raise.
+    if _models_installed():
+        pytest.skip("[models] extra installed — auto would select real backends")
+    cfg = ConsoleConfig(data_root=tmp_path, mode="local", models="auto")
+    mem = _build_memory(cfg)
+    try:
+        assert type(mem.embedder).__name__ == "FakeEmbedder"
+    finally:
+        mem.close()
+
+
+def test_resolved_models_mode_stub_is_stub(tmp_path):
+    cfg = ConsoleConfig(data_root=tmp_path, mode="local", models="stub")
+    assert resolved_models_mode(cfg) == "stub"
+
+
+def test_resolved_models_mode_auto_reflects_import_availability(tmp_path):
+    cfg = ConsoleConfig(data_root=tmp_path, mode="local", models="auto")
+    expected = "real" if _models_installed() else "stub"
+    assert resolved_models_mode(cfg) == expected
+
+
+def test_resolved_models_mode_auto_selects_real_when_importable(
+    tmp_path, monkeypatch
+):
+    # Assert the SELECTION LOGIC (not a real model load): with the import made
+    # to succeed, auto resolves to "real". The console venv lacks the extra, so
+    # we inject a stand-in module so `import sentence_transformers` succeeds.
+    import sys
+    import types
+
+    monkeypatch.setitem(
+        sys.modules, "sentence_transformers", types.ModuleType("sentence_transformers")
+    )
+    cfg = ConsoleConfig(data_root=tmp_path, mode="local", models="auto")
+    assert resolved_models_mode(cfg) == "real"
+
+
+def test_resolved_models_mode_stub_ignores_importable_extras(
+    tmp_path, monkeypatch
+):
+    # Even if the extra were importable, models="stub" pins "stub".
+    import sys
+    import types
+
+    monkeypatch.setitem(
+        sys.modules, "sentence_transformers", types.ModuleType("sentence_transformers")
+    )
+    cfg = ConsoleConfig(data_root=tmp_path, mode="local", models="stub")
+    assert resolved_models_mode(cfg) == "stub"
 
 
 @pytest.fixture

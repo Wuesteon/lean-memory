@@ -24,6 +24,73 @@ from .events import EventLog
 T = TypeVar("T")
 
 
+def _build_memory(config: ConsoleConfig) -> Memory:
+    """Build the console's Memory, opportunistically upgrading to real backends.
+
+    Mirror of the core engine's own wiring in
+    ``lean_memory.mcp_server._build_memory`` (src/lean_memory/mcp_server.py,
+    ~lines 34-82); kept as a mirror (not a private-symbol import) exactly as the
+    namespace sanitizer is mirrored in config.py. Two INDEPENDENT upgrades, each
+    guarded by its own import so either can succeed without the other:
+      * ``models``  (sentence_transformers) → real embedder + reranker.
+      * ``extract`` (gliner2)               → Gliner2Generator for extraction.
+    Anything not installed falls back to lean-memory's deterministic offline
+    stubs, so the console always runs.
+
+    ``config.models`` gates the whole upgrade:
+      * ``"stub"`` → force the deterministic offline stubs (tests/CI, and the
+        console's own default behavior on a stub-only install).
+      * ``"auto"`` → upgrade each backend whose optional extra is importable.
+    """
+    if config.models == "stub":
+        return Memory(root=config.data_root)
+
+    kwargs: dict = {}
+
+    try:
+        import sentence_transformers  # noqa: F401
+
+        from lean_memory.embed.sentence_transformer import (
+            SentenceTransformerEmbedder,
+        )
+        from lean_memory.retrieve.rerank import CrossEncoderReranker
+
+        kwargs["embedder"] = SentenceTransformerEmbedder()
+        kwargs["reranker"] = CrossEncoderReranker()
+    except ImportError:
+        # `models` extra not installed — keep the deterministic stub backends.
+        pass
+
+    try:
+        import gliner2  # noqa: F401
+
+        from lean_memory.extract.gliner_extractor import Gliner2Generator
+
+        kwargs["generator"] = Gliner2Generator()
+    except ImportError:
+        # `extract` extra not installed — keep the stub candidate generator.
+        pass
+
+    return Memory(root=config.data_root, **kwargs)
+
+
+def resolved_models_mode(config: ConsoleConfig) -> str:
+    """Report whether the built Memory uses real or stub retrieval backends.
+
+    "stub" is forced when config.models == "stub"; otherwise "real" only when
+    the [models] extra (sentence_transformers) is importable — matching the
+    embedder/reranker upgrade in _build_memory. This is the resolved value the
+    whoami view surfaces so the UI can warn that semantic scores are stubbed.
+    """
+    if config.models == "stub":
+        return "stub"
+    try:
+        import sentence_transformers  # noqa: F401
+    except ImportError:
+        return "stub"
+    return "real"
+
+
 @dataclass
 class AddResult:
     fact_ids: list = field(default_factory=list)
@@ -64,10 +131,10 @@ class EngineGateway:
     def __init__(self, config: ConsoleConfig, event_log: EventLog) -> None:
         self._config = config
         self._events = event_log
-        # The default Memory constructor is fully offline (stub backends), so
-        # both models="stub" and models="auto" build the offline engine here;
-        # real-model wiring is a Task 9 boot concern, out of the gateway.
-        self._memory = Memory(root=config.data_root)
+        # models="stub" forces the deterministic offline backends; models="auto"
+        # opportunistically upgrades to the real embedder/reranker (and GLiNER2
+        # extractor) when the optional extras are importable — see _build_memory.
+        self._memory = _build_memory(config)
         self._locks: dict[str, asyncio.Lock] = {}
         # A single dedicated worker thread owns every engine call. The engine's
         # per-namespace SqliteStore connections are opened with the sqlite3
