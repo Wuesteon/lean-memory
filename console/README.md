@@ -29,8 +29,10 @@ uvx lean-memory-console serve
 ```
 
 `serve` accepts `--root`, `--port`, and `--no-open` (skip the browser launch).
-The tokened URL is single-use per launch; the browser drops `?token=…` from the
-address bar once the session cookie is set.
+On load the SPA captures the token from `?token=…` — held in memory and sent as
+the `X-Console-Token` header on every request — and strips it from the address
+bar (`history.replaceState`). There is no cookie; a page refresh without the
+token drops the session.
 
 Via the Claude Code plugin (recommended), the MCP is wired automatically:
 
@@ -66,8 +68,8 @@ local-mode Host guard and no per-launch session token. The controls are the
 bearer gate (`LM_API_KEY`) plus the MCP transport-security Host allowlist. If
 you reach the container over a LAN hostname/IP (no reverse proxy), list the
 host(s) in `LM_MCP_ALLOWED_HOSTS` (comma-separated; `:*` matches any port) or
-the `/mcp` mount rejects the request on its Host check — a commented example
-sits in the packaged `docker-compose.yml`. The compose service builds the
+the `/mcp` mount 421s on its Host check — a commented example sits in the
+packaged `docker-compose.yml`. The compose service builds the
 `full` image target; container env is `LM_DATA_ROOT` / `LM_API_KEY` (required) /
 `PORT` / `LM_CONSOLE_MODELS` / `LM_MCP_ALLOWED_HOSTS`.
 
@@ -129,8 +131,9 @@ entirely.
 Namespaces are created implicitly on first accepted `memory_add`. There is no
 create-namespace step, and no delete-namespace surface (ADD-only discipline —
 to remove a namespace, delete its `.db` file while nothing is running).
-Namespaces whose sanitized name is empty or starts with `_` are **rejected**
-(the `_events.db` sidecar is reserved).
+Namespaces whose sanitized name starts with `_` are **rejected** (the
+`_events.db` sidecar is reserved); an empty name is not rejected — it sanitizes
+to `default`.
 
 ## Image size (Docker `full`)
 
