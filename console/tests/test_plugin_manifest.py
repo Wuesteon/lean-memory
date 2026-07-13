@@ -77,3 +77,13 @@ def test_status_command_warns_about_lm_data_trap() -> None:
     text = (PLUGIN / "commands" / "memory-status.md").read_text()
     assert "./lm_data" in text, "status must warn about the ./lm_data mismatch trap"
     assert "lean-memory-console" in text
+
+
+def test_no_print_status_dead_invocation_anywhere_in_plugin() -> None:
+    # `serve --print-status` is not a real CLI flag; guard against it creeping
+    # back into any plugin command or manifest.
+    for path in PLUGIN.rglob("*"):
+        if path.is_file():
+            assert "--print-status" not in path.read_text(errors="ignore"), (
+                f"dead --print-status invocation found in {path}"
+            )

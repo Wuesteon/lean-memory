@@ -6,9 +6,9 @@ Report where memory actually lives and how to connect, so the human never
 inspects an empty root while the agent wrote elsewhere.
 
 1. Print the resolved data root (the console applies `--root` >
-   `LM_DATA_ROOT` > `~/.lean_memory`) and list its namespaces:
+   `LM_DATA_ROOT` > `~/.lean_memory`):
 
-   !`lean-memory-console serve --root "${LM_DATA_ROOT:-$HOME/.lean_memory}" --print-status 2>/dev/null || lean-memory-console mcp --help >/dev/null 2>&1; echo "Resolved root: ${LM_DATA_ROOT:-$HOME/.lean_memory}"`
+   !`echo "Resolved root: ${LM_DATA_ROOT:-$HOME/.lean_memory}"`
 
    Then enumerate namespace `.db` files under that root (skipping `_*.db`):
 

@@ -6,7 +6,9 @@ Start the transient read-only console over the resolved data root and open the
 tokened URL. The server binds `127.0.0.1`, prints a URL containing a
 single-use session token, and runs until you press Ctrl-C.
 
-Run the console in the background and surface its URL:
+Run the console and surface its URL. `serve` runs in the foreground and blocks
+until you press Ctrl-C; if you need to keep working in this shell, launch it as
+a background job with a trailing `&`:
 
 !`lean-memory-console serve`
 
