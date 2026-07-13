@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "lean-memory": {
+      "command": "uvx",
+      "args": ["lean-memory-console", "mcp"]
+    }
+  }
+}

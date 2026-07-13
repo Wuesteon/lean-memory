@@ -1,0 +1,15 @@
+{
+  "name": "lean-memory-console",
+  "description": "Marketplace for the lean-memory Claude Code plugin: a local-first observing MCP and read-only verification console for agent memory.",
+  "owner": {
+    "name": "lean-memory",
+    "url": "https://github.com/Wuesteon/lean-memory-console"
+  },
+  "plugins": [
+    {
+      "name": "lean-memory",
+      "source": "./plugin",
+      "description": "Observing MCP + read-only console for lean-memory: store and search agent memories from Claude Code, then verify the supersession spine, per-hit score breakdown, and provenance episodes in a local UI."
+    }
+  ]
+}
