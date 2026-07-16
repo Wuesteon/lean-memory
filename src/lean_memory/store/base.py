@@ -108,6 +108,15 @@ class Store(ABC):
         """Move a fact between the hot/cold tiers — fact.tier + fact_vec.tier, one txn."""
 
     @abstractmethod
+    def merge_usage_stats(
+        self, fact_id: str, access_count: int, last_access: Optional[int]
+    ) -> None:
+        """Overwrite a fact's usage stats (access_count, last_access) — the
+        DEDUP-EXACT survivor-merge write (§4.1): the survivor inherits the
+        cluster-summed access_count and the max coalesce(last_access, valid_at).
+        Plain UPDATE on fact; no vec/FTS surface involved."""
+
+    @abstractmethod
     def get_embedding(self, fact_id: str) -> Optional[np.ndarray]:
         """Read a fact's stored full-dim vector back (no re-embed). None if absent."""
 

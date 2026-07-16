@@ -501,6 +501,20 @@ class SqliteStore(Store):
         db.execute("UPDATE fact_vec SET tier=? WHERE fact_id=?", (tier, fact_id))
         self._commit()
 
+    def merge_usage_stats(
+        self, fact_id: str, access_count: int, last_access: Optional[int]
+    ) -> None:
+        """DEDUP-EXACT survivor-merge write (§4.1): OVERWRITE the survivor's
+        usage stats with the cluster-merged values (access_count summed over the
+        cluster, last_access = max coalesce(last_access, valid_at)). Plain UPDATE
+        on fact — no vec/FTS surface. Commits through _commit so it participates
+        in an open batch() window."""
+        self._db.execute(
+            "UPDATE fact SET access_count=?, last_access=? WHERE id=?",
+            (access_count, last_access, fact_id),
+        )
+        self._commit()
+
     def get_embedding(self, fact_id: str) -> Optional[np.ndarray]:
         """Read a fact's stored full-dim vector back (no re-embed). None if absent.
 
