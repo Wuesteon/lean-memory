@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Iterator, Optional, Sequence
 
 import numpy as np
 from sqlite_vec import serialize_float32
@@ -40,10 +41,21 @@ def _serialize(vec: np.ndarray) -> bytes:
 
 
 class SqliteStore(Store):
-    def __init__(self, path: str | Path, *, dim: int = 768, coarse_dim: int = 256) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        dim: int = 768,
+        coarse_dim: int = 256,
+        busy_timeout_ms: int = 1500,
+    ) -> None:
         self.path = str(path)
         self.dim = dim
         self.coarse_dim = coarse_dim
+        # Lock budget (§7.1): 1500 ms serving default; maintenance opens with 5000.
+        self.busy_timeout_ms = busy_timeout_ms
+        # When True, per-call commits are suppressed — set only inside batch().
+        self._in_batch = False
         self._db = self._connect()
         self._init_schema()
 
@@ -58,7 +70,34 @@ class SqliteStore(Store):
         db.enable_load_extension(False)
         db.execute("PRAGMA journal_mode=WAL")  # better single-writer concurrency
         db.execute("PRAGMA foreign_keys=ON")
+        db.execute(f"PRAGMA busy_timeout={int(self.busy_timeout_ms)}")
         return db
+
+    # ── commit routing (single choke point for batch suppression) ──
+    def _commit(self) -> None:
+        """Every mutator commits through here so batch() can suppress it in ONE place.
+        Inside a batch window the commit is deferred to the single COMMIT at exit."""
+        if not self._in_batch:
+            self._db.commit()
+
+    @contextmanager
+    def batch(self) -> Iterator[None]:
+        """Atomic unit-of-work (§4.0): BEGIN IMMEDIATE, suppress per-call commits, one
+        COMMIT at exit, ROLLBACK on exception. execute() only — executescript() would
+        implicitly commit and break atomicity. Not re-entrant (a nested batch is a bug)."""
+        if self._in_batch:
+            raise RuntimeError("batch() is not re-entrant")
+        self._db.execute("BEGIN IMMEDIATE")
+        self._in_batch = True
+        try:
+            yield
+        except BaseException:
+            self._in_batch = False
+            self._db.rollback()
+            raise
+        else:
+            self._in_batch = False
+            self._db.commit()
 
     def _init_schema(self) -> None:
         self._check_existing_dims()
@@ -111,7 +150,7 @@ class SqliteStore(Store):
             (episode.id, episode.namespace, episode.raw, episode.source,
              episode.t_ref, episode.created_at),
         )
-        self._db.commit()
+        self._commit()
 
     # ── entities ──
     def upsert_entity(self, entity: Entity) -> Entity:
@@ -127,7 +166,7 @@ class SqliteStore(Store):
             (entity.id, entity.namespace, entity.name, entity.type,
              entity.summary, entity.resolved_id, entity.created_at),
         )
-        self._db.commit()
+        self._commit()
         return entity
 
     def get_entity(self, entity_id: str) -> Optional[Entity]:
@@ -163,7 +202,7 @@ class SqliteStore(Store):
             "INSERT INTO fact_fts(fact_id, fact_text) VALUES (?,?)",
             (fact.id, fact.fact_text),
         )
-        db.commit()
+        self._commit()
 
     def supersede_fact(self, old_fact_id: str, new_fact_id: str, valid_to: int) -> None:
         db = self._db
@@ -173,7 +212,7 @@ class SqliteStore(Store):
         )
         # keep the vec0 metadata filter column in sync so superseded facts drop out
         db.execute("UPDATE fact_vec SET is_latest=0 WHERE fact_id=?", (old_fact_id,))
-        db.commit()
+        self._commit()
 
     def get_fact(self, fact_id: str) -> Optional[Fact]:
         row = self._db.execute("SELECT * FROM fact WHERE id=?", (fact_id,)).fetchone()
@@ -311,7 +350,93 @@ class SqliteStore(Store):
             "UPDATE fact SET last_access=?, access_count=access_count+1 WHERE id=?",
             (when_ms, fact_id),
         )
-        self._db.commit()
+        self._commit()
+
+    # ── maintenance mutation surface (sleep-time job; design spec §4.0) ──
+    def retire_duplicate(self, loser_id: str, survivor_id: str) -> None:
+        """Retire an exact duplicate onto its survivor (two-surface, one txn).
+
+        Flips loser is_latest=0 + superseded_by=survivor on fact AND fact_vec;
+        valid_to is UNTOUCHED (verb (c) — the is_latest_only=False as-of surface is
+        unchanged). Maintains the chain invariant that every OPEN retired duplicate
+        (superseded_by set, valid_to NULL) points DIRECTLY at an is_latest=1 survivor:
+          (i)  resolve `survivor_id` to its live canonical (depth 1) — a retired
+               survivor arg would otherwise leave the loser pointing at a non-latest row;
+          (ii) re-point existing open losers of `loser_id` at that canonical, so a
+               transitive B→A→D retirement never resurrects B when D is later superseded
+               (rev-3 blocker, §4.0 / §10.2).
+        """
+        if loser_id == survivor_id:
+            raise ValueError("retire_duplicate: survivor must differ from loser")
+        db = self._db
+        # (i) resolve the survivor arg to its live canonical (depth 1).
+        row = db.execute(
+            "SELECT superseded_by, is_latest FROM fact WHERE id=?", (survivor_id,)
+        ).fetchone()
+        if row is not None and not row["is_latest"] and row["superseded_by"]:
+            survivor_id = row["superseded_by"]
+        if loser_id == survivor_id:  # resolution collapsed onto the loser — reject
+            raise ValueError("retire_duplicate: survivor resolves to the loser")
+
+        db.execute(
+            "UPDATE fact SET superseded_by=?, is_latest=0 WHERE id=?",
+            (survivor_id, loser_id),
+        )
+        db.execute("UPDATE fact_vec SET is_latest=0 WHERE fact_id=?", (loser_id,))
+        # (ii) re-point existing OPEN losers of the loser directly at the survivor.
+        db.execute(
+            "UPDATE fact SET superseded_by=? WHERE superseded_by=? AND valid_to IS NULL",
+            (survivor_id, loser_id),
+        )
+        self._commit()
+
+    def set_tier(self, fact_id: str, tier: str) -> None:
+        """Move a fact between the hot/cold tiers — fact.tier + fact_vec.tier, one txn."""
+        db = self._db
+        db.execute("UPDATE fact SET tier=? WHERE id=?", (tier, fact_id))
+        db.execute("UPDATE fact_vec SET tier=? WHERE fact_id=?", (tier, fact_id))
+        self._commit()
+
+    def get_embedding(self, fact_id: str) -> Optional[np.ndarray]:
+        """Read a fact's stored full-dim vector back (no re-embed). None if absent.
+
+        Mirrors add_fact's serialization: vec0 holds float32 blobs, read via
+        np.frombuffer — an exact round-trip."""
+        row = self._db.execute(
+            "SELECT embedding FROM fact_vec WHERE fact_id=?", (fact_id,)
+        ).fetchone()
+        if row is None or row["embedding"] is None:
+            return None
+        return np.frombuffer(row["embedding"], dtype=np.float32)
+
+    def iter_latest_facts(self, after_id: Optional[str] = None) -> Iterator[Fact]:
+        """Id high-water scan over is_latest=1 rows (evict/summarize candidates).
+        Ids are time-sortable (types.new_id), so id order is ingestion order."""
+        if after_id is None:
+            rows = self._db.execute(
+                "SELECT * FROM fact WHERE is_latest=1 ORDER BY id"
+            ).fetchall()
+        else:
+            rows = self._db.execute(
+                "SELECT * FROM fact WHERE is_latest=1 AND id > ? ORDER BY id",
+                (after_id,),
+            ).fetchall()
+        for r in rows:
+            yield _row_to_fact(r)
+
+    def iter_slots_touched_since(self, cursor_id: str) -> Iterator[tuple[str, str]]:
+        """DISTINCT (subject_id, predicate) slots that GAINED a member since the cursor.
+
+        Keyed on any fact with id > cursor — so a duplicate landing on a long-quiet
+        slot resurfaces it (the verified cursor gap a bare latest-scan would miss).
+        Slot transforms then read the full slot via find_latest_in_slot."""
+        rows = self._db.execute(
+            "SELECT DISTINCT subject_id, predicate FROM fact WHERE id > ? "
+            "ORDER BY subject_id, predicate",
+            (cursor_id,),
+        ).fetchall()
+        for r in rows:
+            yield (r["subject_id"], r["predicate"])
 
     def close(self) -> None:
         self._db.close()

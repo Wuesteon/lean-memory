@@ -8,7 +8,8 @@ backing file (per-tenant isolation), so the interface is opened per-namespace.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional, Sequence
+from contextlib import contextmanager
+from typing import Iterator, Optional, Sequence
 
 import numpy as np
 
@@ -79,6 +80,41 @@ class Store(ABC):
     @abstractmethod
     def touch(self, fact_id: str, when_ms: int) -> None:
         """Record an access (recency/decay bookkeeping)."""
+
+    # ── maintenance mutation surface (sleep-time job; design spec §4.0) ──
+    @abstractmethod
+    @contextmanager
+    def batch(self) -> Iterator[None]:
+        """Unit-of-work: BEGIN IMMEDIATE, suspend per-call commits, one COMMIT at
+        exit, ROLLBACK on exception. Model/embedding work is forbidden inside the
+        window (§7.1) — the lock-hold span must contain only row writes."""
+        ...
+
+    @abstractmethod
+    def retire_duplicate(self, loser_id: str, survivor_id: str) -> None:
+        """Retire an exact duplicate: flip loser is_latest=0 + superseded_by=survivor
+        on fact and fact_vec; valid_to UNTOUCHED (verb (c), as-of-safe). Maintains the
+        chain invariant — every open retired duplicate points DIRECTLY at an is_latest=1
+        survivor — by (i) resolving `survivor_id` to its live canonical and (ii)
+        re-pointing existing open losers of `loser_id` at that survivor."""
+
+    @abstractmethod
+    def set_tier(self, fact_id: str, tier: str) -> None:
+        """Move a fact between the hot/cold tiers — fact.tier + fact_vec.tier, one txn."""
+
+    @abstractmethod
+    def get_embedding(self, fact_id: str) -> Optional[np.ndarray]:
+        """Read a fact's stored full-dim vector back (no re-embed). None if absent."""
+
+    @abstractmethod
+    def iter_latest_facts(self, after_id: Optional[str] = None) -> Iterator[Fact]:
+        """Id high-water scan over is_latest=1 rows (evict/summarize candidates)."""
+
+    @abstractmethod
+    def iter_slots_touched_since(self, cursor_id: str) -> Iterator[tuple[str, str]]:
+        """DISTINCT (subject_id, predicate) slots that GAINED a member (a fact with
+        id > cursor) since the cursor — including duplicates landing on long-quiet
+        slots (the verified cursor gap)."""
 
     # ── lifecycle ──
     @abstractmethod
