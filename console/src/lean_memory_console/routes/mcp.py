@@ -54,6 +54,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from ..config import ConsoleConfig
 from ..engine import EngineGateway
+from ..mcp_tools import register_maintenance_tools
 
 # Loopback host/origin default allow-list for the inner MCP transport-security
 # check. Host entries use the SDK's exact + ``base:*`` port-wildcard matching;
@@ -124,6 +125,10 @@ def _build_http_mcp(
                 for h in res.hits
             ]
         }
+
+    # The same four maintenance tools as the stdio surfaces (§6.3). No review prompt
+    # here — MCP prompts are a stdio-client capability; HTTP clients use the tools.
+    register_maintenance_tools(mcp, gateway)
 
     return mcp
 

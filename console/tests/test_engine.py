@@ -201,3 +201,108 @@ async def test_search_records_ui_origin(gateway, tmp_path):
     searches = log.list_events("proj", kind="search")
     log.close()
     assert searches["items"][0]["payload"]["origin"] == "ui"
+
+
+# ── sleep-time maintenance gateway methods (spec §8, §6.3) ────────────────────
+def _stage_evict_proposal(root, namespace):
+    """Stage one evict proposal directly on the namespace file — the review path's
+    input. Dims match FakeEmbedder (768/256), the gateway's stub embedder."""
+    import json
+
+    import numpy as np
+    from lean_memory.store.sqlite_store import SqliteStore
+    from lean_memory.types import Entity, Episode, Fact, new_id, now_ms
+
+    path = root / f"{namespace}.db"
+    store = SqliteStore(path, dim=768, coarse_dim=256)
+    try:
+        ent = store.upsert_entity(Entity(namespace=namespace, name="Zoe", type=None))
+        ep = Episode(namespace=namespace, raw="seed", t_ref=now_ms(), source="user")
+        store.add_episode(ep)
+        fact = Fact(
+            id=new_id(), namespace=namespace, subject_id=ent.id, predicate="about",
+            object_literal="x", fact_text="Zoe once liked trivia.", valid_at=now_ms(),
+            episode_id=ep.id, confidence=1.0, salience=1.0, is_inference=0,
+            ingested_at=now_ms(), created_at=now_ms(),
+        )
+        store.add_fact(
+            fact, np.zeros(768, dtype=np.float32), np.zeros(256, dtype=np.float32)
+        )
+        run_id = store.create_run(namespace, "cli", now_ms(), "hash")
+        pid = store.stage_proposal(
+            run_id, namespace, "evict",
+            json.dumps({"fact_id": fact.id, "fact_text": fact.fact_text}),
+            now_ms(), now_ms() + 30 * 86_400_000, "stub",
+        )
+        store.finish_run(run_id, "ok", now_ms(), None, fact.id)
+        return pid, fact.id
+    finally:
+        store.close()
+
+
+@pytest.mark.anyio
+async def test_gateway_maintain_dry_run_writes_nothing(gateway, tmp_path):
+    await gateway.add("proj", "I work at Acme.")
+    report = await gateway.maintain("proj", apply=False)
+    assert report["mode"] == "dry-run"
+    import sqlite3
+
+    con = sqlite3.connect(f"file:{tmp_path / 'proj.db'}?mode=ro", uri=True)
+    runs = con.execute("SELECT COUNT(*) FROM maintenance_run").fetchone()[0]
+    con.close()
+    assert runs == 0
+
+
+@pytest.mark.anyio
+async def test_gateway_maintain_apply_records_run(gateway, tmp_path):
+    await gateway.add("proj", "I work at Acme.")
+    report = await gateway.maintain("proj", apply=True)
+    assert report["mode"] == "apply"
+    import sqlite3
+
+    con = sqlite3.connect(f"file:{tmp_path / 'proj.db'}?mode=ro", uri=True)
+    ok = con.execute(
+        "SELECT COUNT(*) FROM maintenance_run WHERE status='ok'"
+    ).fetchone()[0]
+    con.close()
+    assert ok == 1
+
+
+@pytest.mark.anyio
+async def test_gateway_review_queue_and_decide_roundtrip(gateway, tmp_path):
+    pid, _fid = _stage_evict_proposal(tmp_path, "proj")
+    groups = await gateway.review_queue("proj")
+    ids = [p["id"] for g in groups for p in g["proposals"]]
+    assert pid in ids
+    result = await gateway.decide("proj", pid, "reject")
+    assert result["outcome"] == "rejected"
+    # Gone from the pending queue after the decision.
+    groups2 = await gateway.review_queue("proj")
+    assert all(p["id"] != pid for g in groups2 for p in g["proposals"])
+
+
+@pytest.mark.anyio
+async def test_gateway_promote_roundtrips(gateway, tmp_path):
+    _pid, fid = _stage_evict_proposal(tmp_path, "proj")
+    result = await gateway.promote("proj", fid)
+    assert result["outcome"] == "promoted"
+    assert result["tier"] == "hot"
+
+
+@pytest.mark.anyio
+async def test_gateway_maintenance_status_shape(gateway, tmp_path):
+    """Status is a model-free ledger read shaped like the core server's."""
+    _pid, _fid = _stage_evict_proposal(tmp_path, "proj")
+    status = await gateway.maintenance_status("proj")
+    assert status["namespace"] == "proj"
+    assert status["runs"] >= 1
+    assert status["pending_proposals"] == 1
+    assert status["last_run"]["status"] == "ok"
+
+
+@pytest.mark.anyio
+async def test_gateway_maintenance_status_empty_namespace(gateway):
+    status = await gateway.maintenance_status("never_written")
+    assert status["runs"] == 0
+    assert status["pending_proposals"] == 0
+    assert status["last_run"] is None

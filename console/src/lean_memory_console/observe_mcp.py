@@ -14,6 +14,7 @@ from mcp.server.fastmcp import FastMCP
 from .config import ConsoleConfig
 from .engine import EngineGateway
 from .events import EventLog
+from .mcp_tools import register_maintenance_tools, register_review_prompt
 
 
 def build_mcp(gateway: EngineGateway) -> FastMCP:
@@ -51,6 +52,11 @@ def build_mcp(gateway: EngineGateway) -> FastMCP:
                 for h in res.hits
             ]
         }
+
+    # The four sleep-time maintenance tools, identical to the core + HTTP surfaces
+    # (§6.3), plus the stdio-only review-workflow prompt (§6.4).
+    register_maintenance_tools(mcp, gateway)
+    register_review_prompt(mcp)
 
     return mcp
 

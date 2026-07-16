@@ -15,7 +15,20 @@ def _tool_params(mcp_obj):
     return out
 
 
-def test_wrapper_exposes_exactly_add_and_search(tmp_path):
+# The exact tool set the console stdio wrapper exposes (§6.3): the two memory tools
+# plus the four sleep-time maintenance tools. Set equality goes RED the moment the
+# wrapper grows or drops a tool — the pin that keeps all three surfaces in lockstep.
+_EXPECTED_TOOLS = {
+    "memory_add",
+    "memory_search",
+    "memory_maintenance_run",
+    "memory_maintenance_status",
+    "memory_review_queue",
+    "memory_review_decide",
+}
+
+
+def test_wrapper_exposes_exactly_the_six_tools(tmp_path):
     cfg = ConsoleConfig(data_root=tmp_path, mode="local", models="stub")
     log = EventLog(tmp_path)
     gw = EngineGateway(cfg, log)
@@ -23,7 +36,21 @@ def test_wrapper_exposes_exactly_add_and_search(tmp_path):
     names = set(_tool_params(wrapper).keys())
     gw.close()
     log.close()
-    assert names == {"memory_add", "memory_search"}
+    assert names == _EXPECTED_TOOLS
+
+
+def test_http_mount_exposes_the_same_tool_set(tmp_path):
+    """The Docker HTTP mount registers the identical six tools (§6.3 surface parity)."""
+    from lean_memory_console.routes.mcp import _build_http_mcp
+
+    cfg = ConsoleConfig(data_root=tmp_path, mode="local", models="stub")
+    log = EventLog(tmp_path)
+    gw = EngineGateway(cfg, log)
+    http_mcp = _build_http_mcp(gw, cfg.mcp_allowed_hosts)
+    names = set(_tool_params(http_mcp).keys())
+    gw.close()
+    log.close()
+    assert names == _EXPECTED_TOOLS
 
 
 def test_memory_clear_absent(tmp_path):

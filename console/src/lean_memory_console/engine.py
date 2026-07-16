@@ -17,11 +17,23 @@ from dataclasses import dataclass, field
 from typing import Callable, TypeVar
 
 from lean_memory import Memory
+from lean_memory.maintain import mcp_support
+from lean_memory.maintain.cli import _report_to_dict as _maint_report_to_dict
 
 from .config import ConsoleConfig, is_reserved_namespace, ns_db_path
 from .events import EventLog
 
 T = TypeVar("T")
+
+
+def _maintenance_report_to_dict(namespace: str, report, *, apply: bool) -> dict:
+    """The maintenance run summary, shaped identically to the core MCP surface.
+
+    Reuses the core CLI's RunReport→dict projection so the console tool's return is
+    byte-for-byte the same shape as core `memory_maintenance_run` (tool-name and
+    return parity across all three surfaces, §6.3). auto_only is always False from the
+    gateway path — the console never runs the auto-only preview mode."""
+    return _maint_report_to_dict(namespace, report, apply=apply, auto_only=False)
 
 
 def _build_memory(config: ConsoleConfig) -> Memory:
@@ -268,6 +280,94 @@ class EngineGateway:
             },
         )
         return SearchResult(hits=hits, duration_ms=duration_ms)
+
+    # ── sleep-time maintenance (design spec §8, §6.3) ──────────────────────────
+    # Four public methods mirroring add/search EXACTLY: retry_busy inside the single
+    # worker thread, under the per-namespace asyncio lock. Both console MCP surfaces
+    # (observe_mcp.py stdio + routes/mcp.py HTTP) reach the engine ONLY through these.
+    async def maintain(
+        self, namespace: str, *, apply: bool = False
+    ) -> dict:
+        """Run one maintenance pass on `namespace` (§6.3). DRY-RUN by default.
+
+        Lock consequence (§8): a console-invoked maintain() holds this namespace's
+        gateway lock for the whole run, so it blocks live add/search on that namespace
+        until the run returns. The underlying MaintenanceRunner works in SHORT per-batch
+        commits (it releases the SQLite write lock between batches), so this is
+        tolerable without any chunking logic here — we keep the wrapper simple and let
+        the runner's own batch cadence bound the stall. Returns the run summary dict.
+        """
+        if is_reserved_namespace(namespace):
+            raise ValueError(f"reserved namespace rejected: {namespace!r}")
+        async with self._lock(namespace):
+            report = await self._run(
+                lambda: retry_busy(
+                    lambda: self._memory.maintain(
+                        namespace, apply=apply, trigger="console"
+                    )
+                )
+            )
+        return _maintenance_report_to_dict(namespace, report, apply=apply)
+
+    async def maintenance_status(self, namespace: str) -> dict:
+        """The namespace's maintenance ledger — runs + pending proposals (§6.3).
+
+        A pure ledger read via the model-free ``mcp_support.read_status`` against this
+        gateway's data root, shaped IDENTICALLY to the core server's status tool. No
+        lock and no worker thread: it opens its own read-only connection and never
+        touches the serving store, so it cannot contend with a live add/search."""
+        return await self._run(
+            lambda: retry_busy(
+                lambda: mcp_support.read_status(
+                    self._config.data_root, namespace
+                )
+            )
+        )
+
+    async def review_queue(
+        self, namespace: str, *, kind: str | None = None, limit: int = 20
+    ) -> list:
+        """Pending proposals grouped by entity, with evidence (§6.3). Read-shaped but
+        routed through the write worker + lock because review_queue lazily EXPIRES
+        overdue proposals (a write) — it must not race a concurrent add on the file."""
+        async with self._lock(namespace):
+            return await self._run(
+                lambda: retry_busy(
+                    lambda: self._memory.review_queue(
+                        namespace, kind=kind, limit=limit
+                    )
+                )
+            )
+
+    async def decide(
+        self,
+        namespace: str,
+        proposal_id: str,
+        decision: str,
+        *,
+        edited_text: str | None = None,
+    ) -> dict:
+        """Decide a proposal: approve | reject | edit | promote (§6.3). Applies on
+        approve through the lifecycle, all under the per-namespace lock + retry_busy."""
+        async with self._lock(namespace):
+            return await self._run(
+                lambda: retry_busy(
+                    lambda: self._memory.decide(
+                        proposal_id, decision, namespace=namespace,
+                        edited_text=edited_text, decided_by="console",
+                    )
+                )
+            )
+
+    async def promote(self, namespace: str, fact_id: str) -> dict:
+        """Explicitly promote a fact back to the hot tier (§4.4). Explicit-only —
+        there is no automatic promotion anywhere. Lock + retry_busy like the rest."""
+        async with self._lock(namespace):
+            return await self._run(
+                lambda: retry_busy(
+                    lambda: self._memory.promote(fact_id, namespace=namespace)
+                )
+            )
 
     def close(self) -> None:
         # Close the engine on the same dedicated worker that opened its store
