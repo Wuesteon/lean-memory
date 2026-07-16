@@ -338,6 +338,7 @@ class SqliteStore(Store):
         *,
         is_latest_only: bool = True,
         as_of: Optional[int] = None,
+        include_cold: bool = False,
     ) -> list[tuple[str, float]]:
         """Two-stage Matryoshka: coarse 256-dim KNN over a wider pool, then re-score
         the survivors at full 768-dim. The coarse pool is k*COARSE_FACTOR wide so the
@@ -346,10 +347,21 @@ class SqliteStore(Store):
         coarse_k = max(k * COARSE_FACTOR, k)
 
         latest_clause = "AND is_latest = 1" if is_latest_only else ""
+        # Tier filter (§8): drop cold facts from the default hot surface ONLY — the
+        # vec0 'tier' metadata column ANDed into the KNN WHERE. Applied EXCLUSIVELY in
+        # default latest-mode: as_of queries NEVER filter tier (historical reads see
+        # everything), and include_cold=True opts out explicitly. Every existing row is
+        # tier='hot', so this clause is byte-identical for anyone who never runs
+        # maintenance (regression pin).
+        tier_clause = (
+            "AND tier = 'hot'"
+            if (is_latest_only and as_of is None and not include_cold)
+            else ""
+        )
         # Stage 1: coarse KNN. vec0 KNN must use a single MATCH + LIMIT.
         coarse_rows = self._db.execute(
             f"""SELECT fact_id, distance FROM fact_vec
-                WHERE embedding_256 MATCH ? {latest_clause}
+                WHERE embedding_256 MATCH ? {latest_clause} {tier_clause}
                 ORDER BY distance LIMIT ?""",
             (_serialize(query_256), coarse_k),
         ).fetchall()
@@ -398,10 +410,15 @@ class SqliteStore(Store):
 
     def sparse_search(
         self, query_text: str, k: int, *, is_latest_only: bool = True,
-        as_of: Optional[int] = None,
+        as_of: Optional[int] = None, include_cold: bool = False,
     ) -> list[tuple[str, float]]:
         # FTS5 BM25: lower bm25() is better, so we negate to "higher is better".
-        needs_row_check = is_latest_only or as_of is not None
+        # Tier filter (§8): drop cold facts in default latest-mode ONLY — same
+        # condition as the dense arm, applied in the existing per-row recheck so both
+        # arms read the single flag set_tier writes. as_of NEVER filters tier;
+        # include_cold=True opts out. Byte-identical when nothing is cold.
+        filter_tier = is_latest_only and as_of is None and not include_cold
+        needs_row_check = is_latest_only or as_of is not None or filter_tier
         try:
             rows = self._db.execute(
                 """SELECT f.fact_id AS fact_id, bm25(fact_fts) AS score
@@ -423,12 +440,14 @@ class SqliteStore(Store):
         for r in rows:
             if needs_row_check:
                 row = self._db.execute(
-                    "SELECT is_latest, valid_at, valid_to FROM fact WHERE id=?",
+                    "SELECT is_latest, valid_at, valid_to, tier FROM fact WHERE id=?",
                     (r["fact_id"],),
                 ).fetchone()
                 if not row:
                     continue
                 if is_latest_only and not row["is_latest"]:
+                    continue
+                if filter_tier and row["tier"] != "hot":
                     continue
                 if as_of is not None and not (
                     row["valid_at"] <= as_of
@@ -644,6 +663,55 @@ class SqliteStore(Store):
             "SELECT * FROM maintenance_proposal WHERE id=?", (proposal_id,)
         ).fetchone()
         return dict(row) if row else None
+
+    # ── proposal decide (CAS) + apply-time stamps (design spec §5) ──
+    def cas_decide_proposal(
+        self,
+        proposal_id: str,
+        status: str,
+        decided_at: int,
+        decided_by: str,
+        edited_text: Optional[str] = None,
+    ) -> int:
+        """Compare-and-swap a pending proposal into a decided state (§5).
+
+        The EXACT §5 CAS: only flips a row still `status='pending'`, so two concurrent
+        writers race for the single UPDATE and exactly one wins. Returns the rows
+        updated — 1 == this caller won the decision, 0 == the proposal was already
+        decided (report, never re-apply). Commits through _commit so it participates
+        in an open approve-and-apply batch() window (§5)."""
+        cur = self._db.execute(
+            "UPDATE maintenance_proposal SET status=?, decided_at=?, decided_by=?, "
+            "edited_text=? WHERE id=? AND status='pending'",
+            (status, decided_at, decided_by, edited_text, proposal_id),
+        )
+        self._commit()
+        return cur.rowcount
+
+    def mark_proposal_applied(self, proposal_id: str, applied_at: int) -> None:
+        """Stamp applied_at on a proposal after its verbs committed (§5). Plain UPDATE
+        keyed on id — the apply happens inside the same batch() as the CAS, so the
+        stamp co-commits with the spine writes."""
+        self._db.execute(
+            "UPDATE maintenance_proposal SET applied_at=? WHERE id=?",
+            (applied_at, proposal_id),
+        )
+        self._commit()
+
+    def expire_proposal(self, proposal_id: str, expiry_reason: str) -> int:
+        """Expire a still-pending proposal (§5): status='expired' + expiry_reason
+        ('timeout' | 'stale_target'), CAS on status='pending' so it can never clobber
+        an already-decided row. Returns rows updated (1 == expired here, 0 == already
+        decided). Commits through _commit — the stale-target expiry co-commits with an
+        open batch() window so it is the write that survives while the spine stays
+        untouched (§5)."""
+        cur = self._db.execute(
+            "UPDATE maintenance_proposal SET status='expired', expiry_reason=? "
+            "WHERE id=? AND status='pending'",
+            (expiry_reason, proposal_id),
+        )
+        self._commit()
+        return cur.rowcount
 
     def list_proposals(
         self,

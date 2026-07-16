@@ -9,6 +9,7 @@ propose transforms stage judgment calls into the human review queue.
 from __future__ import annotations
 
 from .config import MS_PER_DAY, MaintenanceConfig
+from .lifecycle import decide, promote_fact
 from .score import value
 from .summarize import (
     ExtractiveStubSummarizer,
@@ -34,6 +35,8 @@ __all__ = [
     "MaintenanceConfig",
     "MS_PER_DAY",
     "value",
+    "decide",
+    "promote_fact",
     "Summarizer",
     "ExtractiveStubSummarizer",
     "OllamaSummarizer",

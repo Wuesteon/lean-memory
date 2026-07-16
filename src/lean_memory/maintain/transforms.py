@@ -121,6 +121,7 @@ def dedup_exact(
     slots: Iterable[Slot],
     *,
     exclude_ids: Optional[set[str]] = None,
+    dry_run: bool = False,
 ) -> list[Merge]:
     """Auto-retire exact duplicates within each slot (§4.1).
 
@@ -162,10 +163,12 @@ def dedup_exact(
             merged_access = sum(f.access_count for f in members)
             merged_last_access = max(_coalesced_last_access(f) for f in members)
 
-            with store.batch():
-                for loser in losers:
-                    store.retire_duplicate(loser.id, survivor.id)
-                store.merge_usage_stats(survivor.id, merged_access, merged_last_access)
+            # dry_run: compute the merge record but write NOTHING (no batch, no verbs).
+            if not dry_run:
+                with store.batch():
+                    for loser in losers:
+                        store.retire_duplicate(loser.id, survivor.id)
+                    store.merge_usage_stats(survivor.id, merged_access, merged_last_access)
 
             merges.append(
                 Merge(
@@ -190,6 +193,7 @@ def dedup_near(
     run_id: str,
     budget: int = 1_000_000,
     skip_signatures: Optional[set[frozenset[str]]] = None,
+    dry_run: bool = False,
 ) -> tuple[list[StagedProposal], int]:
     """Stage near-duplicate merge PROPOSALS — zero spine writes (§4.2).
 
@@ -251,7 +255,8 @@ def dedup_near(
                 if len(staged) >= budget:
                     dropped += 1
                     continue
-                pid = store.stage_proposal(
+                # dry_run: count the would-stage proposal, write NOTHING.
+                pid = "dry-run" if dry_run else store.stage_proposal(
                     run_id=run_id,
                     namespace=a.namespace,
                     kind="dedup_near",
@@ -277,6 +282,7 @@ def summarize(
     run_id: str,
     budget: int = 1_000_000,
     skip_signatures: Optional[set[frozenset[str]]] = None,
+    dry_run: bool = False,
 ) -> tuple[list[StagedProposal], int]:
     """Stage SUMMARIZE proposals — zero spine writes, no embedding at stage time (§4.3).
 
@@ -340,7 +346,8 @@ def summarize(
         if len(staged) >= budget:
             dropped += 1
             continue
-        pid = store.stage_proposal(
+        # dry_run: count the would-stage proposal, write NOTHING.
+        pid = "dry-run" if dry_run else store.stage_proposal(
             run_id=run_id,
             namespace=sources[0].namespace,
             kind="summarize",
@@ -385,6 +392,7 @@ def evict_propose(
     run_id: str,
     budget: int = 1_000_000,
     exclude_ids: Optional[set[str]] = None,
+    dry_run: bool = False,
 ) -> tuple[list[StagedProposal], int]:
     """Stage EVICT (demotion) proposals for still-latest facts below the value floor
     but NOT in the strict auto-band — zero spine writes (§4.4).
@@ -419,7 +427,8 @@ def evict_propose(
         if len(staged) >= budget:
             dropped += 1
             continue
-        pid = store.stage_proposal(
+        # dry_run: count the would-stage proposal, write NOTHING.
+        pid = "dry-run" if dry_run else store.stage_proposal(
             run_id=run_id,
             namespace=f.namespace,
             kind="evict",
@@ -450,6 +459,7 @@ def evict_auto(
     now: int,
     *,
     exclude_ids: Optional[set[str]] = None,
+    dry_run: bool = False,
 ) -> list[str]:
     """Auto-demote the strict-band facts to 'cold' without review (§4.4).
 
@@ -466,7 +476,8 @@ def evict_auto(
             continue
         if not _in_auto_band(f, config, now):
             continue
-        store.set_tier(f.id, "cold")
+        if not dry_run:  # dry_run: count the would-demote, write NOTHING.
+            store.set_tier(f.id, "cold")
         demoted.append(f.id)
     return demoted
 
@@ -482,6 +493,7 @@ def run_transforms(
     summarizer: Optional[Summarizer] = None,
     extra_exclude_ids: Optional[set[str]] = None,
     pending_signatures: Optional[dict[str, set[frozenset[str]]]] = None,
+    dry_run: bool = False,
 ) -> TransformReport:
     """Run all four transforms in the spec-mandated intra-run order (§4.4).
 
@@ -521,7 +533,7 @@ def run_transforms(
 
     near, dropped = dedup_near(
         store, config, now, slots, run_id=run_id, budget=remaining,
-        skip_signatures=pending_signatures.get("dedup_near"),
+        skip_signatures=pending_signatures.get("dedup_near"), dry_run=dry_run,
     )
     report.proposals.extend(near)
     report.dropped_proposals += dropped
@@ -529,7 +541,7 @@ def run_transforms(
 
     summ, dropped = summarize(
         store, config, now, summarizer, run_id=run_id, budget=max(0, remaining),
-        skip_signatures=pending_signatures.get("summarize"),
+        skip_signatures=pending_signatures.get("summarize"), dry_run=dry_run,
     )
     report.proposals.extend(summ)
     report.dropped_proposals += dropped
@@ -539,7 +551,7 @@ def run_transforms(
     # eviction (excluding its id covers both re-propose and auto-demote — §4.4).
     ev_prop, dropped = evict_propose(
         store, config, now, run_id=run_id, budget=max(0, remaining),
-        exclude_ids=extra_exclude_ids,
+        exclude_ids=extra_exclude_ids, dry_run=dry_run,
     )
     report.proposals.extend(ev_prop)
     report.dropped_proposals += dropped
@@ -548,7 +560,11 @@ def run_transforms(
     # This run's staged ids UNION prior runs' still-pending referenced ids: neither a
     # fact a human is reviewing now nor one staged this run is auto-mutated.
     staged_ids = report.staged_fact_ids | extra_exclude_ids
-    report.merges = dedup_exact(store, config, now, slots, exclude_ids=staged_ids)
-    report.demoted_ids = evict_auto(store, config, now, exclude_ids=staged_ids)
+    report.merges = dedup_exact(
+        store, config, now, slots, exclude_ids=staged_ids, dry_run=dry_run
+    )
+    report.demoted_ids = evict_auto(
+        store, config, now, exclude_ids=staged_ids, dry_run=dry_run
+    )
 
     return report

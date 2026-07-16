@@ -41,6 +41,7 @@ class Retriever:
         as_of: Optional[int] = None,
         is_latest_only: bool = True,
         now: Optional[int] = None,
+        include_cold: bool = False,
     ) -> list[RetrievedFact]:
         now = now if now is not None else now_ms()
 
@@ -48,13 +49,15 @@ class Retriever:
         q_full = self.embedder.embed_one(query)
         q_coarse = matryoshka_truncate(q_full, self.embedder.coarse_dim)
 
-        # 2+3. dense and sparse arms, each over-retrieved
+        # 2+3. dense and sparse arms, each over-retrieved. include_cold threads to both
+        # arms; the store applies the tier filter only in default latest-mode (§8).
         dense = self.store.dense_search(
             q_coarse, q_full, OVER_RETRIEVE,
-            is_latest_only=is_latest_only, as_of=as_of,
+            is_latest_only=is_latest_only, as_of=as_of, include_cold=include_cold,
         )
         sparse = self.store.sparse_search(
             query, OVER_RETRIEVE, is_latest_only=is_latest_only, as_of=as_of,
+            include_cold=include_cold,
         )
 
         # 4. RRF fuse (k=10). score(d) = Σ 1/(k + rank_i(d)), rank 1-based.

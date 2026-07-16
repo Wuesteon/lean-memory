@@ -55,7 +55,11 @@ class Store(ABC):
         self, subject_id: str, predicate: str
     ) -> Sequence[Fact]:
         """All currently-latest facts in a (subject, predicate) slot — for contradiction
-        detection / supersession lookup."""
+        detection / supersession lookup.
+
+        MUST NOT filter on tier (§8): ingest supersession lookup runs through here and
+        must see COLD facts, else a demoted-then-superseded fact would never close.
+        The tier filter lives only in the two retrieval arms, never here."""
 
     # ── retrieval primitives (the Retriever composes these) ──
     @abstractmethod
@@ -67,16 +71,20 @@ class Store(ABC):
         *,
         is_latest_only: bool = True,
         as_of: Optional[int] = None,
+        include_cold: bool = False,
     ) -> list[tuple[str, float]]:
-        """Two-stage Matryoshka dense search. Returns [(fact_id, distance)] best-first."""
+        """Two-stage Matryoshka dense search. Returns [(fact_id, distance)] best-first.
+        Filters tier='hot' ONLY in default latest-mode (is_latest_only and as_of is
+        None and not include_cold); as_of never filters tier (§8)."""
 
     @abstractmethod
     def sparse_search(
         self, query_text: str, k: int, *, is_latest_only: bool = True,
-        as_of: Optional[int] = None,
+        as_of: Optional[int] = None, include_cold: bool = False,
     ) -> list[tuple[str, float]]:
         """BM25 lexical search. Returns [(fact_id, score)] best-first.
-        as_of applies the same interval predicate as the dense arm."""
+        as_of applies the same interval predicate as the dense arm; the tier filter
+        follows the same default-latest-mode-only rule (§8)."""
 
     @abstractmethod
     def hydrate(self, fact_ids: Sequence[str]) -> dict[str, Fact]:
@@ -208,6 +216,29 @@ class Store(ABC):
     @abstractmethod
     def get_proposal(self, proposal_id: str) -> Optional[dict]:
         """A single proposal row as a dict, or None."""
+
+    @abstractmethod
+    def cas_decide_proposal(
+        self,
+        proposal_id: str,
+        status: str,
+        decided_at: int,
+        decided_by: str,
+        edited_text: Optional[str] = None,
+    ) -> int:
+        """CAS a pending proposal into a decided state (§5). Only flips a row still
+        `status='pending'`; returns rows updated (1 == won the decision, 0 == already
+        decided). The race-safe decide primitive."""
+
+    @abstractmethod
+    def mark_proposal_applied(self, proposal_id: str, applied_at: int) -> None:
+        """Stamp applied_at after a proposal's verbs committed (§5). Co-commits with
+        the spine writes when called inside the approve-and-apply batch()."""
+
+    @abstractmethod
+    def expire_proposal(self, proposal_id: str, expiry_reason: str) -> int:
+        """Expire a still-pending proposal (§5): status='expired' + expiry_reason
+        ('timeout'|'stale_target'), CAS on status='pending'. Returns rows updated."""
 
     @abstractmethod
     def list_proposals(

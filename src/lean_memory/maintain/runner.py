@@ -298,14 +298,70 @@ class MaintenanceRunner:
             return None, "lost race", None
         return result["run_id"], None, result.get("took_over")
 
+    # ── dry run (§6.3 — report-only, zero writes, no lease) ──
+    def dry_run(self) -> RunReport:
+        """Compute the full would-do report with ZERO writes and NO lease (§6.3).
+
+        A dry-run mutates nothing — no proposals, no auto transforms, not even a lease
+        row (it writes nothing, so it needs no lease). It still runs the threshold gate
+        and, if over threshold, the transforms in report-only mode (`dry_run=True`
+        suppresses every store write and counts instead). The returned RunReport has
+        status 'ok' and run_id=None (no ledger row exists). This is the `apply=False`
+        default path for `Memory.maintain()` and the CLI/MCP tools.
+        """
+        cfg_hash = self.config.config_hash()
+        prior = self.store.last_finished_run(self.namespace)
+        previous_cursor = prior.get("cursor_id") if prior else None
+        last_finished_at = prior.get("finished_at") if prior else None
+
+        over, threshold_stats = self._threshold_check(previous_cursor, last_finished_at)
+        stats = dict(threshold_stats)
+        if not over:
+            stats["below_threshold"] = True
+            return RunReport(
+                status="ok", run_id=None, below_threshold=True,
+                threshold_stats=stats, transform_report=None,
+                cursor_id=previous_cursor, config_hash=cfg_hash,
+            )
+
+        if previous_cursor is None:
+            slots = sorted(
+                {(f.subject_id, f.predicate) for f in self.store.iter_latest_facts()}
+            )
+        else:
+            slots = list(self.store.iter_slots_touched_since(previous_cursor))
+
+        exclude_ids, pending_sigs = self._prior_pending()
+        report = run_transforms(
+            self.store, self.config, self._now_ms(), run_id="dry-run", slots=slots,
+            summarizer=self.summarizer, extra_exclude_ids=exclude_ids,
+            pending_signatures=pending_sigs, dry_run=True,
+        )
+        stats["merges"] = len(report.merges)
+        stats["staged"] = len(report.proposals)
+        stats["demoted"] = len(report.demoted_ids)
+        stats["dropped_proposals"] = report.dropped_proposals
+        return RunReport(
+            status="ok", run_id=None, below_threshold=False,
+            threshold_stats=stats, transform_report=report,
+            cursor_id=self._max_fact_id(), config_hash=cfg_hash,
+        )
+
     # ── the run ──
-    def run(self, *, on_batch: Optional[Callable[[], None]] = None) -> RunReport:
+    def run(
+        self, *, on_batch: Optional[Callable[[], None]] = None, dry_run: bool = False
+    ) -> RunReport:
         """Execute one maintenance run end to end (lease → thresholds → transforms).
 
         `on_batch` is a test hook invoked at every batch boundary (after the runner's
         own heartbeat) — used by the heartbeat/crash tests to observe cadence and to
         simulate a mid-run crash. Production passes None.
+
+        `dry_run=True` delegates to `dry_run()` — report-only, zero writes, no lease.
         """
+        if dry_run:
+            return self.dry_run()
+
         cfg_hash = self.config.config_hash()
         claim_ms = self._now_ms()
         run_id, skipped_reason, took_over = self._try_claim_lease(claim_ms)
