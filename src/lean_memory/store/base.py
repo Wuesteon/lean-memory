@@ -116,6 +116,67 @@ class Store(ABC):
         id > cursor) since the cursor — including duplicates landing on long-quiet
         slots (the verified cursor gap)."""
 
+    # ── maintenance ledger + proposal CRUD (schema v2, design spec §4.0/§5) ──
+    # Pure row CRUD — no decide/apply logic (that is the proposal lifecycle, a
+    # later task). The create-half is needed by the maintenance runner.
+    @abstractmethod
+    def create_run(
+        self, namespace: str, trigger: str, started_at: int, config_hash: Optional[str]
+    ) -> str:
+        """Claim the maintenance lease: INSERT a status='running' maintenance_run and
+        return its id. The ux_run_live partial-unique index makes this the atomic
+        lease claim — a second live run for the same namespace raises
+        sqlite3.IntegrityError (§7.2)."""
+
+    @abstractmethod
+    def heartbeat_run(self, run_id: str, at: int) -> None:
+        """Bump maintenance_run.heartbeat_at — proof the run is still alive (§7.2)."""
+
+    @abstractmethod
+    def finish_run(
+        self,
+        run_id: str,
+        status: str,
+        finished_at: int,
+        stats_json: Optional[str],
+        cursor_id: Optional[str],
+    ) -> None:
+        """Close a run: stamp status ('ok'|'aborted'), finished_at, stats_json,
+        cursor_id. Clearing status='running' releases the ux_run_live lease."""
+
+    @abstractmethod
+    def get_live_run(self, namespace: str) -> Optional[dict]:
+        """The status='running' run for a namespace, or None. (At most one exists —
+        ux_run_live enforces it.)"""
+
+    @abstractmethod
+    def stage_proposal(
+        self,
+        run_id: str,
+        namespace: str,
+        kind: str,
+        payload_json: str,
+        created_at: int,
+        expires_at: int,
+        evidence_backend: Optional[str] = None,
+    ) -> str:
+        """INSERT a status='pending' maintenance_proposal and return its id."""
+
+    @abstractmethod
+    def get_proposal(self, proposal_id: str) -> Optional[dict]:
+        """A single proposal row as a dict, or None."""
+
+    @abstractmethod
+    def list_proposals(
+        self,
+        namespace: str,
+        status: Optional[str] = None,
+        kind: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Proposals for a namespace, newest first, optionally filtered by status
+        and/or kind."""
+
     # ── lifecycle ──
     @abstractmethod
     def close(self) -> None: ...

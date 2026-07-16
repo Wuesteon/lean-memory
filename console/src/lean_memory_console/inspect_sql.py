@@ -311,7 +311,7 @@ def list_entities(db_path: Path, page: int = 1, page_size: int = 50) -> dict:
 # Filled once from the first run's printed digests (Step 5), then a test pins
 # equality so engine drift turns the suite red.
 EXPECTED_SCHEMA_FINGERPRINT = (
-    "c12a9560c065a6cc9be19b91b71b4ebee1b74eceff477040073f85943c43742f"
+    "a6c7f41188a196929ff4e7c257a181c100af9f0f7091aa93d428a9a7c0eec8ef"
 )
 EXPECTED_SANITIZER_FINGERPRINT = (
     "dfef8699dd9519f2ef6592be577d25fdb2ae761e298d7063ced3323a14e2cf77"

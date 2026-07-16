@@ -80,4 +80,46 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fact_fts USING fts5(
   fact_id UNINDEXED,
   fact_text
 );
+
+-- ── MAINTENANCE LAYER (schema v2; sleep-time job, design spec §5) ────
+-- All IF-NOT-EXISTS so they belong in the always-run blob. The non-idempotent
+-- v2 DDL (ALTER TABLE fact ADD COLUMN record_kind) lives ONLY in the versioned
+-- `if user_version < 2:` branch of _init_schema — never here — because ADD
+-- COLUMN raises 'duplicate column name' on reopen.
+CREATE TABLE IF NOT EXISTS fact_derivation (
+  summary_id TEXT NOT NULL REFERENCES fact(id),
+  source_id  TEXT NOT NULL REFERENCES fact(id),
+  run_id     TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (summary_id, source_id)
+);
+CREATE INDEX IF NOT EXISTS ix_derivation_source ON fact_derivation(source_id);
+  -- the staleness cascade's lookup path (§4.3)
+
+CREATE TABLE IF NOT EXISTS maintenance_run (
+  id TEXT PRIMARY KEY, namespace TEXT NOT NULL,
+  started_at INTEGER NOT NULL, finished_at INTEGER,
+  heartbeat_at INTEGER,
+  trigger TEXT NOT NULL,                          -- 'cli'|'mcp'|'auto'|'console'
+  cursor_id TEXT,
+  config_hash TEXT, stats_json TEXT,
+  status TEXT NOT NULL DEFAULT 'running'          -- 'running'|'ok'|'aborted'
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_run_live
+  ON maintenance_run(namespace) WHERE status='running';
+  -- the INSERT is the atomic lease claim: a second runner gets a constraint
+  -- error, not a silent second row (verified race gap in rev 1)
+
+CREATE TABLE IF NOT EXISTS maintenance_proposal (
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES maintenance_run(id),
+  namespace TEXT NOT NULL,
+  kind TEXT NOT NULL,                              -- 'dedup_near'|'summarize'|'evict'
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',          -- 'pending'|'approved'|'rejected'|'edited'|'expired'
+  expiry_reason TEXT,                              -- 'timeout'|'stale_target'
+  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+  decided_at INTEGER, decided_by TEXT,             -- 'console'|'mcp'|'expiry'
+  applied_at INTEGER, edited_text TEXT,
+  evidence_backend TEXT                            -- 'stub'|'ollama:<model>'|embedder id
+);
 """

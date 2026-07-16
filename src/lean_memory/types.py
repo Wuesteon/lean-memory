@@ -87,6 +87,7 @@ class Fact:
     access_count: int = 0
     is_inference: int = 0
     tier: str = "hot"  # 'hot'|'cold'
+    record_kind: str = "fact"  # 'fact'|'summary' (schema v2; sleep-time maintenance)
 
     id: str = field(default_factory=new_id)
     created_at: int = field(default_factory=now_ms)

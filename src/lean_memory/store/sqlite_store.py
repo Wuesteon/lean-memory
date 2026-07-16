@@ -23,7 +23,7 @@ from typing import Iterator, Optional, Sequence
 import numpy as np
 from sqlite_vec import serialize_float32
 
-from ..types import Entity, Episode, Fact
+from ..types import Entity, Episode, Fact, new_id
 from .base import Store
 from .schema import SCHEMA_SQL
 
@@ -101,14 +101,35 @@ class SqliteStore(Store):
 
     def _init_schema(self) -> None:
         self._check_existing_dims()
+        # Always-run blob: every statement is CREATE ... IF NOT EXISTS, so it is a
+        # no-op on an already-created DB (fresh or migrated) and creates the v2
+        # tables/indexes on any DB that lacks them.
         sql = SCHEMA_SQL.format(dim=self.dim, coarse_dim=self.coarse_dim)
         self._db.executescript(sql)
+
         # Schema-version stamp — the migration anchor for future releases.
         # Version 1 == the 0.1.x layout; pre-stamp files (0.1.0–0.1.2, version 0)
-        # have an identical schema and are upgraded in place. Never write over a
+        # have an identical spine and are treated as version 1. Never write over a
         # NEWER release's stamp.
-        if self._db.execute("PRAGMA user_version").fetchone()[0] == 0:
+        version = self._db.execute("PRAGMA user_version").fetchone()[0]
+        if version == 0:
+            version = 1
             self._db.execute("PRAGMA user_version = 1")
+
+        # ── Versioned migrations. Each branch runs the NON-idempotent DDL for its
+        # version exactly once, keyed off user_version. A fresh DB is version 1
+        # here (just stamped above), so it flows through the same `< 2` branch and
+        # gains record_kind via the SAME ALTER — there is no separate fresh path.
+        # ADD COLUMN is not idempotent (raises 'duplicate column name' on reopen),
+        # so it MUST live here and never in the always-run blob.
+        if version < 2:
+            self._db.execute(
+                "ALTER TABLE fact ADD COLUMN record_kind TEXT NOT NULL "
+                "DEFAULT 'fact'"  # 'fact'|'summary'
+            )
+            self._db.execute("PRAGMA user_version = 2")
+            version = 2
+
         self._db.commit()
 
     def _check_existing_dims(self) -> None:
@@ -182,15 +203,15 @@ class SqliteStore(Store):
                  valid_at, valid_to, superseded_by, is_latest,
                  ingested_at, expired_at, invalidated_by,
                  confidence, salience, last_access, access_count, is_inference, tier,
-                 episode_id, created_at)
-               VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?,?,?, ?,?)""",
+                 record_kind, episode_id, created_at)
+               VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?,?,?, ?,?,?)""",
             (fact.id, fact.namespace, fact.subject_id, fact.predicate, fact.object_id,
              fact.object_literal, fact.fact_text,
              fact.valid_at, fact.valid_to, fact.superseded_by, fact.is_latest,
              fact.ingested_at, fact.expired_at, fact.invalidated_by,
              fact.confidence, fact.salience, fact.last_access, fact.access_count,
              fact.is_inference, fact.tier,
-             fact.episode_id, fact.created_at),
+             fact.record_kind, fact.episode_id, fact.created_at),
         )
         db.execute(
             "INSERT INTO fact_vec(fact_id, namespace, is_latest, tier, embedding, embedding_256) "
@@ -438,6 +459,107 @@ class SqliteStore(Store):
         for r in rows:
             yield (r["subject_id"], r["predicate"])
 
+    # ── maintenance ledger + proposal CRUD (schema v2; design spec §4.0/§5) ──
+    # Pure row CRUD. No decide/apply logic lives here (that is the proposal
+    # lifecycle, a later task) — these just read and write the ledger tables.
+    def create_run(
+        self, namespace: str, trigger: str, started_at: int, config_hash: Optional[str]
+    ) -> str:
+        run_id = new_id()
+        # The INSERT is the atomic lease claim: ux_run_live (partial-unique on
+        # namespace WHERE status='running') makes a second live run for the same
+        # namespace raise sqlite3.IntegrityError, not a silent second row.
+        self._db.execute(
+            "INSERT INTO maintenance_run("
+            "id, namespace, started_at, finished_at, heartbeat_at, trigger, "
+            "cursor_id, config_hash, stats_json, status) "
+            "VALUES (?,?,?,?,?,?,?,?,?, 'running')",
+            (run_id, namespace, started_at, None, started_at, trigger,
+             None, config_hash, None),
+        )
+        self._commit()
+        return run_id
+
+    def heartbeat_run(self, run_id: str, at: int) -> None:
+        self._db.execute(
+            "UPDATE maintenance_run SET heartbeat_at=? WHERE id=?", (at, run_id)
+        )
+        self._commit()
+
+    def finish_run(
+        self,
+        run_id: str,
+        status: str,
+        finished_at: int,
+        stats_json: Optional[str],
+        cursor_id: Optional[str],
+    ) -> None:
+        # Clearing status='running' releases the ux_run_live lease.
+        self._db.execute(
+            "UPDATE maintenance_run SET status=?, finished_at=?, stats_json=?, "
+            "cursor_id=? WHERE id=?",
+            (status, finished_at, stats_json, cursor_id, run_id),
+        )
+        self._commit()
+
+    def get_live_run(self, namespace: str) -> Optional[dict]:
+        row = self._db.execute(
+            "SELECT * FROM maintenance_run WHERE namespace=? AND status='running'",
+            (namespace,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def stage_proposal(
+        self,
+        run_id: str,
+        namespace: str,
+        kind: str,
+        payload_json: str,
+        created_at: int,
+        expires_at: int,
+        evidence_backend: Optional[str] = None,
+    ) -> str:
+        proposal_id = new_id()
+        self._db.execute(
+            "INSERT INTO maintenance_proposal("
+            "id, run_id, namespace, kind, payload_json, status, "
+            "created_at, expires_at, evidence_backend) "
+            "VALUES (?,?,?,?,?, 'pending', ?,?,?)",
+            (proposal_id, run_id, namespace, kind, payload_json,
+             created_at, expires_at, evidence_backend),
+        )
+        self._commit()
+        return proposal_id
+
+    def get_proposal(self, proposal_id: str) -> Optional[dict]:
+        row = self._db.execute(
+            "SELECT * FROM maintenance_proposal WHERE id=?", (proposal_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_proposals(
+        self,
+        namespace: str,
+        status: Optional[str] = None,
+        kind: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        where = ["namespace=?"]
+        args: list = [namespace]
+        if status is not None:
+            where.append("status=?")
+            args.append(status)
+        if kind is not None:
+            where.append("kind=?")
+            args.append(kind)
+        clause = " AND ".join(where)
+        rows = self._db.execute(
+            f"SELECT * FROM maintenance_proposal WHERE {clause} "
+            f"ORDER BY created_at DESC, id DESC LIMIT ?",
+            (*args, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def close(self) -> None:
         self._db.close()
 
@@ -476,5 +598,6 @@ def _row_to_fact(row: sqlite3.Row) -> Fact:
         invalidated_by=row["invalidated_by"], confidence=row["confidence"],
         salience=row["salience"], last_access=row["last_access"],
         access_count=row["access_count"], is_inference=row["is_inference"],
-        tier=row["tier"], episode_id=row["episode_id"], created_at=row["created_at"],
+        tier=row["tier"], record_kind=row["record_kind"],
+        episode_id=row["episode_id"], created_at=row["created_at"],
     )
