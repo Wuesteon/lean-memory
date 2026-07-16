@@ -469,6 +469,15 @@ raw SQL writes); CAS "already decided elsewhere" surfaced in the UI; console
 suite green; spec §8.1 fatigue levers present (entity grouping, batch
 approve, budget cap).
 
+**Carry-in cleanups from WP10a's final whole-branch review** (small; touch
+files this packet already opens): move the proposal-budget check ahead of the
+summarizer invocation in `maintain/transforms.py` (matters once Ollama is the
+`[llm]` summarizer); add an exists-guard so CLI dry-run against an explicit
+nonexistent `--namespace` doesn't create an empty `<ns>.db`; declare `path`
+on the Store ABC; document the `memory_maintenance_run(apply=True)`
+(auto band + stages) vs auto-spawn `--auto-only` (auto band only) asymmetry
+in the tool docstring.
+
 ---
 
 ## Anti-goals (decided, with evidence — do not open packets for these)
