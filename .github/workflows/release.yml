@@ -1,12 +1,22 @@
 name: release
 
+# Publishes BOTH packages to PyPI via Trusted Publishing on a v* tag:
+#   - lean-memory          (core, from the repo root)
+#   - lean-memory-console  (the console the Claude Code plugin launches via
+#                           `uvx lean-memory-console` — the plugin channel is
+#                           dead for strangers unless this is on PyPI)
+# workflow_dispatch re-runs are safe: skip-existing ignores files already
+# uploaded, so a partial release (e.g. console publisher not yet configured
+# on PyPI) can be completed later without re-tagging.
+
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build sdist + wheel
+    name: Build sdist + wheel (core)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,8 +36,29 @@ jobs:
           name: dist
           path: dist/
 
+  build-console:
+    name: Build sdist + wheel (console)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build console distributions
+        run: |
+          pip install build
+          python -m build console/ --outdir console-dist/
+
+      - name: Upload console dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: console-dist
+          path: console-dist/
+
   publish:
-    name: Publish to PyPI (Trusted Publishing)
+    name: Publish lean-memory to PyPI (Trusted Publishing)
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
@@ -42,3 +73,25 @@ jobs:
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+  publish-console:
+    name: Publish lean-memory-console to PyPI (Trusted Publishing)
+    needs: build-console
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download console dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: console-dist
+          path: console-dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: console-dist/
+          skip-existing: true

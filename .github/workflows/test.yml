@@ -40,6 +40,18 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+        env:
+          # Force uv's managed python-build-standalone builds and NEVER a
+          # system/toolcache interpreter: runner images vary in whether their
+          # toolcache CPython was compiled with loadable-sqlite-extensions,
+          # which made the macos·py3.13 leg flake between identical commits
+          # (v0.2.0 release week). Managed builds always have the flag.
+          UV_PYTHON_PREFERENCE: only-managed
+
+      # Fail HERE, in one obvious line, if the provisioned interpreter cannot
+      # load sqlite extensions — not as 100+ cryptic store-test failures.
+      - name: Assert loadable-sqlite-extensions support
+        run: uv run python -c "import sqlite3; assert hasattr(sqlite3.Connection, 'enable_load_extension'), 'CPython built without --enable-loadable-sqlite-extensions'"
 
       # setup-uv with a python-version input already provisions and activates a
       # venv (it exports VIRTUAL_ENV), so no explicit `uv venv` step is needed —
