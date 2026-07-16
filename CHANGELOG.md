@@ -26,6 +26,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     evictions are staged as **proposals** a human reviews; an unreviewed proposal
     **expires** after 30 days (default) rather than auto-applying — silence is
     never consent.
+  - **Console Review page** — the memory console gains a `Review` page: the
+    pending-proposal queue grouped by entity with per-kind before/after
+    evidence, Approve / Keep / Edit-then-approve / Promote verbs, batch-approve
+    per entity, and a run-maintenance button (dry-run by default, apply behind
+    a confirm). Backed by five auth-gated console routes
+    (`/views/{ns}/review/*`, `/views/{ns}/maintenance/*`) that reach the engine
+    only through the gateway; double-decides surface as HTTP 409 with the
+    compare-and-set outcome passed through, so the console and Claude Code can
+    review the same queue without double-applying. Also closes the four WP10a
+    carry-in cleanups (summarizer budget-check ordering, CLI missing-namespace
+    guard, `Store.path` on the ABC, tool-docstring apply/auto-spawn asymmetry).
   - **Conversational review in Claude Code** — four MCP tools
     (`memory_maintenance_run`, dry-run by default; `memory_maintenance_status`,
     model-free; `memory_review_queue`; `memory_review_decide`) on the core
