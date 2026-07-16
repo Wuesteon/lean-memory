@@ -19,6 +19,11 @@ from ..types import Entity, Episode, Fact
 class Store(ABC):
     """Storage + index abstraction. Implementations own one namespace's data."""
 
+    #: The backing file this store owns (one file per namespace, BET 4). Read
+    #: polymorphically — the maintenance runner reports it when a namespace is cleared
+    #: mid-run. Concrete stores set it at construction (SqliteStore in __init__).
+    path: str
+
     # ── provenance ──
     @abstractmethod
     def add_episode(self, episode: Episode) -> None: ...

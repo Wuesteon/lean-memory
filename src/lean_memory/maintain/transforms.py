@@ -333,6 +333,11 @@ def summarize(
         )
         if frozenset(f.id for f in sources) in skip_signatures:
             continue  # this exact source set is already pending — don't double-stage
+        # Budget check BEFORE the summarizer call: a full budget must never invoke the
+        # summarizer (once Ollama is the [llm] summarizer, that is a wasted generation).
+        if len(staged) >= budget:
+            dropped += 1
+            continue
         # Summarizer text computed BEFORE any batch window (§7.1). Stage-time only —
         # no embedding here (embedding is the Task-6 apply path, §4.3).
         summary_text = summarizer.summarize(sources)
@@ -343,9 +348,6 @@ def summarize(
             "summary_text": summary_text,
             "evidence_backend": summarizer.backend_id,
         }
-        if len(staged) >= budget:
-            dropped += 1
-            continue
         # dry_run: count the would-stage proposal, write NOTHING.
         pid = "dry-run" if dry_run else store.stage_proposal(
             run_id=run_id,

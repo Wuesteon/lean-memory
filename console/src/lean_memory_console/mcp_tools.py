@@ -75,7 +75,9 @@ def register_maintenance_tools(mcp: FastMCP, gateway: EngineGateway) -> None:
     ) -> dict[str, Any]:
         """Run one sleep-time maintenance pass (§6.3). DRY-RUN by default (apply=False):
         computes the would-do report with zero writes. apply=True runs the auto band
-        and stages proposals. Symmetric with the CLI. Returns the run summary."""
+        and stages proposals. Symmetric with the CLI. NOTE: the LM_MAINT_AUTO
+        auto-spawn path runs `--apply --auto-only` (auto band only, no proposals) —
+        only interactive apply=True grows the review queue. Returns the run summary."""
         return await gateway.maintain(namespace, apply=apply)
 
     @mcp.tool()
