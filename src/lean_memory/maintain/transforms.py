@@ -189,6 +189,7 @@ def dedup_near(
     *,
     run_id: str,
     budget: int = 1_000_000,
+    skip_signatures: Optional[set[frozenset[str]]] = None,
 ) -> tuple[list[StagedProposal], int]:
     """Stage near-duplicate merge PROPOSALS — zero spine writes (§4.2).
 
@@ -199,7 +200,12 @@ def dedup_near(
     both fact ids/texts, cosine, slot, the multivalued flag, and the proposed
     survivor (argmin valid_at). evidence_backend='stored' (embeddings read back, not
     re-embedded). Respects `budget`; returns (staged, dropped_count).
+
+    `skip_signatures`: `{frozenset(fact_ids)}` of dedup_near proposals ALREADY pending
+    (from a prior run) — a pair matching one is not re-staged, so a crash-resumed run
+    converges without double-staging identical evidence (§7.4 idempotence).
     """
+    skip_signatures = skip_signatures or set()
     staged: list[StagedProposal] = []
     dropped = 0
     tau = config.tau_near
@@ -229,6 +235,8 @@ def dedup_near(
                 cos = _cosine(embs[a.id], embs[b.id])
                 if cos < tau:
                     continue
+                if frozenset((a.id, b.id)) in skip_signatures:
+                    continue  # an identical pair is already pending — don't double-stage
                 # Proposed survivor = argmin(valid_at) (a already sorts first).
                 survivor = min((a, b), key=lambda f: (f.valid_at, f.id))
                 payload = {
@@ -268,6 +276,7 @@ def summarize(
     *,
     run_id: str,
     budget: int = 1_000_000,
+    skip_signatures: Optional[set[frozenset[str]]] = None,
 ) -> tuple[list[StagedProposal], int]:
     """Stage SUMMARIZE proposals — zero spine writes, no embedding at stage time (§4.3).
 
@@ -278,7 +287,12 @@ def summarize(
     carries the source fact ids + texts, the proposed summary text from `summarizer`,
     and evidence_backend = the summarizer's backend id. Respects `budget`; returns
     (staged, dropped_count).
+
+    `skip_signatures`: `{frozenset(source_fact_ids)}` of SUMMARIZE proposals ALREADY
+    pending (from a prior run) — a subject whose source set exactly matches one is not
+    re-staged, so a crash-resumed run does not double-stage the same summary (§7.4).
     """
+    skip_signatures = skip_signatures or set()
     staged: list[StagedProposal] = []
     dropped = 0
     age_floor_ms = config.age_floor_days * MS_PER_DAY
@@ -311,6 +325,8 @@ def summarize(
             (f for fs in qualifying.values() for f in fs),
             key=lambda f: (f.valid_at, f.id),
         )
+        if frozenset(f.id for f in sources) in skip_signatures:
+            continue  # this exact source set is already pending — don't double-stage
         # Summarizer text computed BEFORE any batch window (§7.1). Stage-time only —
         # no embedding here (embedding is the Task-6 apply path, §4.3).
         summary_text = summarizer.summarize(sources)
@@ -464,6 +480,8 @@ def run_transforms(
     run_id: str,
     slots: Iterable[Slot],
     summarizer: Optional[Summarizer] = None,
+    extra_exclude_ids: Optional[set[str]] = None,
+    pending_signatures: Optional[dict[str, set[frozenset[str]]]] = None,
 ) -> TransformReport:
     """Run all four transforms in the spec-mandated intra-run order (§4.4).
 
@@ -476,11 +494,23 @@ def run_transforms(
 
     `slots` is materialized once (the pre-transform snapshot of touched slots) and
     reused for both the near-dup proposals and the exact-dup autos.
+
+    Cross-run coupling (the runner supplies these; §4.4 'facts referenced by any
+    staged proposal' + §7.4 crash idempotence):
+      - `extra_exclude_ids`: fact ids referenced by PRIOR-run pending proposals —
+        unioned into the Phase-2 auto exclusion so an auto transform never touches a
+        fact a human is still reviewing.
+      - `pending_signatures`: `{kind: {frozenset(fact_ids)}}` of prior-run pending
+        proposals — a propose transform skips re-staging an identical-evidence
+        proposal, so a crash-resumed run converges without duplicate proposals.
     """
     from .summarize import default_summarizer
 
     if summarizer is None:
         summarizer = default_summarizer()
+
+    extra_exclude_ids = extra_exclude_ids or set()
+    pending_signatures = pending_signatures or {}
 
     slots = list(slots)  # materialize once — reused across phases
     report = TransformReport()
@@ -489,26 +519,35 @@ def run_transforms(
     budget = config.proposal_budget_per_run
     remaining = budget
 
-    near, dropped = dedup_near(store, config, now, slots, run_id=run_id, budget=remaining)
+    near, dropped = dedup_near(
+        store, config, now, slots, run_id=run_id, budget=remaining,
+        skip_signatures=pending_signatures.get("dedup_near"),
+    )
     report.proposals.extend(near)
     report.dropped_proposals += dropped
     remaining = budget - len(report.proposals)
 
     summ, dropped = summarize(
-        store, config, now, summarizer, run_id=run_id, budget=max(0, remaining)
+        store, config, now, summarizer, run_id=run_id, budget=max(0, remaining),
+        skip_signatures=pending_signatures.get("summarize"),
     )
     report.proposals.extend(summ)
     report.dropped_proposals += dropped
     remaining = budget - len(report.proposals)
 
+    # A fact referenced by a prior-run pending proposal is never re-proposed for
+    # eviction (excluding its id covers both re-propose and auto-demote — §4.4).
     ev_prop, dropped = evict_propose(
-        store, config, now, run_id=run_id, budget=max(0, remaining)
+        store, config, now, run_id=run_id, budget=max(0, remaining),
+        exclude_ids=extra_exclude_ids,
     )
     report.proposals.extend(ev_prop)
     report.dropped_proposals += dropped
 
     # ── Phase 2: AUTO transforms, EXCLUDING every staged-proposal target ──
-    staged_ids = report.staged_fact_ids
+    # This run's staged ids UNION prior runs' still-pending referenced ids: neither a
+    # fact a human is reviewing now nor one staged this run is auto-mutated.
+    staged_ids = report.staged_fact_ids | extra_exclude_ids
     report.merges = dedup_exact(store, config, now, slots, exclude_ids=staged_ids)
     report.demoted_ids = evict_auto(store, config, now, exclude_ids=staged_ids)
 

@@ -16,6 +16,7 @@ from .summarize import (
     Summarizer,
     default_summarizer,
 )
+from .runner import MaintenanceRunner, RunReport
 from .transforms import (
     Merge,
     StagedProposal,
@@ -47,4 +48,6 @@ __all__ = [
     "Merge",
     "StagedProposal",
     "TransformReport",
+    "MaintenanceRunner",
+    "RunReport",
 ]
