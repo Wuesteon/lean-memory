@@ -139,3 +139,104 @@ export interface EventRow {
   duration_ms: number;
   payload: AddPayload | SearchPayload;
 }
+
+// ── Maintenance review (spec §8.1) ──────────────────────────────────────────
+export type ProposalKind = "dedup_near" | "summarize" | "evict";
+
+// Per-kind evidence payloads, mirroring the transforms' staged JSON verbatim
+// (transforms.py dedup_near/summarize/evict). fact_texts/source_fact_texts are
+// id→text maps.
+export interface DedupNearPayload {
+  slot: { subject_id: string; predicate: string };
+  fact_ids: string[];
+  fact_texts: Record<string, string>;
+  cosine: number;
+  multivalued: boolean;
+  proposed_survivor: string;
+  evidence_backend: string;
+}
+
+export interface SummarizePayload {
+  subject_id: string;
+  source_fact_ids: string[];
+  source_fact_texts: Record<string, string>;
+  summary_text: string;
+  evidence_backend: string;
+}
+
+export interface EvictPayload {
+  fact_id: string;
+  fact_text: string;
+  value: number;
+  salience: number;
+  access_count: number;
+  evidence_backend: string;
+}
+
+// One `maintenance_proposal` row (SELECT *), plus the parsed `payload` the
+// gateway's review_queue attaches per proposal (memory.py review_queue).
+export interface Proposal {
+  id: string;
+  run_id: string;
+  namespace: string;
+  kind: ProposalKind;
+  payload_json: string;
+  status: string;
+  expiry_reason: string | null;
+  created_at: number;
+  expires_at: number;
+  decided_at: number | null;
+  decided_by: string | null;
+  applied_at: number | null;
+  edited_text: string | null;
+  evidence_backend: string | null;
+  payload: DedupNearPayload | SummarizePayload | EvictPayload;
+}
+
+// review_queue returns one group per subject entity (memory.py review_queue).
+export interface ProposalGroup {
+  entity_id: string | null;
+  entity_name: string | null;
+  proposals: Proposal[];
+}
+
+// The ledger-only status read (maintain/mcp_support.py read_status).
+export interface MaintenanceRun {
+  id: string;
+  status: string;
+  started_at: number;
+  finished_at: number | null;
+  trigger: string;
+}
+
+export interface MaintenanceStatus {
+  namespace: string;
+  runs: number;
+  pending_proposals: number;
+  last_run: MaintenanceRun | null;
+}
+
+// The run summary returned by maintenance/run (cli._report_to_dict via the
+// gateway). Only the fields the page surfaces are typed.
+export interface MaintenanceRunResult {
+  namespace: string;
+  status: string; // 'ok' | 'skipped'
+  mode: string; // 'dry-run' | 'apply' | 'auto-only'
+  skipped_reason: string | null;
+  below_threshold: boolean;
+  merges: number;
+  demoted: number;
+  staged: number;
+  dropped_proposals: number;
+}
+
+// The decide/promote lifecycle result (lifecycle.py). `outcome` drives the UI;
+// remaining fields vary by outcome and are read opportunistically.
+export interface DecideResult {
+  outcome: string;
+  proposal_id?: string;
+  fact_id?: string;
+  status?: string;
+  applied_at?: number | null;
+  tier?: string;
+}

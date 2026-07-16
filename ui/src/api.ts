@@ -9,13 +9,21 @@ import type {
   Entity,
   EventRow,
   SearchHit,
+  ProposalGroup,
+  MaintenanceStatus,
+  MaintenanceRunResult,
+  DecideResult,
 } from "./types";
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** Parsed JSON error body when the server sent one — e.g. the review
+   *  routes' 409 pass-through carries {outcome, status, applied_at}. */
+  body?: unknown;
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -59,13 +67,15 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     let detail = res.statusText;
+    let body: unknown;
     try {
-      const body = await res.json();
-      detail = (body && (body.detail || body.message)) || detail;
+      body = await res.json();
+      const b = body as { detail?: string; message?: string } | null;
+      detail = (b && (b.detail || b.message)) || detail;
     } catch {
       /* non-JSON error body */
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, detail, body);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -156,5 +166,54 @@ export function testSearch(
   return req<{ hits: SearchHit[]; duration_ms: number }>(
     `/views/${encodeURIComponent(ns)}/test-search`,
     { method: "POST", body: JSON.stringify({ query, k }) },
+  );
+}
+
+// ── §8.1 maintenance review endpoints ──────────────────────────────────────
+
+export function reviewQueue(
+  ns: string,
+  kind?: string,
+  limit?: number,
+): Promise<ProposalGroup[]> {
+  return req<ProposalGroup[]>(
+    `/views/${encodeURIComponent(ns)}/review/queue${qp({ kind, limit })}`,
+  );
+}
+
+// A re-decided proposal comes back as a 409 (routes/review.py) — `req` raises
+// ApiError(409); the caller refreshes the queue on that status.
+export function decideProposal(
+  ns: string,
+  proposalId: string,
+  decision: "approve" | "reject" | "edit",
+  editedText?: string,
+): Promise<DecideResult> {
+  return req<DecideResult>(
+    `/views/${encodeURIComponent(ns)}/review/${encodeURIComponent(proposalId)}/decide`,
+    { method: "POST", body: JSON.stringify({ decision, edited_text: editedText }) },
+  );
+}
+
+export function promoteFact(ns: string, factId: string): Promise<DecideResult> {
+  return req<DecideResult>(
+    `/views/${encodeURIComponent(ns)}/review/promote`,
+    { method: "POST", body: JSON.stringify({ fact_id: factId }) },
+  );
+}
+
+export function maintenanceStatus(ns: string): Promise<MaintenanceStatus> {
+  return req<MaintenanceStatus>(
+    `/views/${encodeURIComponent(ns)}/maintenance/status`,
+  );
+}
+
+export function runMaintenance(
+  ns: string,
+  apply: boolean,
+): Promise<MaintenanceRunResult> {
+  return req<MaintenanceRunResult>(
+    `/views/${encodeURIComponent(ns)}/maintenance/run`,
+    { method: "POST", body: JSON.stringify({ apply }) },
   );
 }
