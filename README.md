@@ -129,6 +129,57 @@ semantically meaningless for real use — install `[mcp,models,extract]`).
 > `[llm]` (a local Ollama model) upgrades that escalated tier to real
 > constrained typing. See ARCHITECTURE.md → Known Limitations.
 
+## Sleep-time maintenance & review
+
+Memory accumulates cruft: the same fact restated a dozen ways, old records that
+never come up, clusters begging to be summarized. lean-memory cleans it up the
+way sleep consolidates memory — an **offline job you run off-hours** that dedupes,
+summarizes, and demotes low-value records, then hands you the judgment calls to
+click through the next morning, in the web console **or conversationally in
+Claude Code**.
+
+**The CLI** (`lean-memory-maintain`) is the primary trigger. It is **dry-run by
+default** — it reports what it *would* do and writes nothing:
+
+```bash
+lean-memory-maintain --root ~/.lean_memory              # dry-run: report only, zero writes
+lean-memory-maintain --root ~/.lean_memory --apply      # auto-apply safe transforms + stage the rest
+lean-memory-maintain --root ~/.lean_memory --auto-only   # with --apply: ONLY the provably-safe band, stage nothing
+lean-memory-maintain --root ~/.lean_memory --json        # one machine-readable object, stable keys
+```
+
+`--root` defaults to `$LM_DATA_ROOT`; add `--namespace NS` to run a single
+namespace instead of every `*.db` under the root. **Overnight, on a schedule** —
+one crontab line runs the safe band nightly at 3am and stages everything else
+for you:
+
+```cron
+0 3 * * *  lean-memory-maintain --root ~/.lean_memory --apply >> ~/.lean_memory/maintain.log 2>&1
+```
+
+**Next-morning review in Claude Code.** Judgment calls (near-duplicate merges,
+summaries, evictions) are staged as *proposals* — nothing changes in stored
+memory until you approve. Run the `/review-memory` plugin command (or invoke the
+`review-memory-maintenance` MCP prompt) and Claude walks you through the queue,
+grouped by entity with before/after evidence, recording only the verdicts you
+give. Four MCP tools back it — `memory_maintenance_run` (dry-run by default,
+like the CLI), `memory_maintenance_status`, `memory_review_queue`, and
+`memory_review_decide` — available on the core `lean-memory-mcp` server and both
+console MCP surfaces. Set `LM_MAINT_AUTO=1` to opt into a background auto-run
+(safe band only) on the first tool call of a stale namespace; it is off by
+default.
+
+**The safety story in one paragraph.** Nothing is ever deleted — maintenance
+only appends, retires (the same `superseded_by` flip ordinary supersession
+uses), or demotes to a cold tier, so your full history stays queryable as-of any
+past point in time, bit-for-bit identical at the store predicate and pinned by
+executable tests. Only two transforms auto-apply: exact-duplicate retirement and
+a strict eviction band; everything judgmental is staged for a human, and an
+unreviewed proposal **expires** after 30 days rather than auto-applying —
+silence is never consent. Cold-demoted facts stay reachable via `as_of` queries
+and `search(..., include_cold=True)`, and promotion back to the hot tier is
+explicit-only, so a read never durably changes what your agent sees.
+
 ## Real Model Quality
 
 The default backends are offline stubs — deterministic and dependency-free, but semantically meaningless. Swap in real models for production-quality retrieval:

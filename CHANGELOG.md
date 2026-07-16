@@ -4,6 +4,51 @@ All notable changes to lean-memory are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Sleep-time maintenance** — an offline job that cleans up stored memory
+  between sessions (dedupe, summarize-old, evict-low-value) while preserving the
+  ADD-only spine and as-of query semantics. Nothing is ever deleted: maintenance
+  only appends, retires via the existing `superseded_by` flip, or demotes to a
+  cold tier, so full history stays queryable at any past point in time —
+  bit-for-bit identical at the store visibility predicate, pinned by executable
+  tests. Design:
+  `docs/superpowers/specs/2026-07-16-sleep-time-maintenance-design.md`.
+  - **`lean-memory-maintain` CLI** (in the core package beside `lean-memory-mcp`)
+    — **dry-run by default**; `--apply` runs the auto band and stages proposals,
+    `--auto-only` runs only the provably-safe band, `--json` emits a
+    machine-readable report. `--root` defaults to `$LM_DATA_ROOT`; `--namespace`
+    scopes to one namespace. Ships a cron/launchd recipe in the README.
+  - **Two-tier autonomy** — only exact-duplicate retirement and a strict
+    eviction band auto-apply. Near-duplicate merges, summaries, and softer
+    evictions are staged as **proposals** a human reviews; an unreviewed proposal
+    **expires** after 30 days (default) rather than auto-applying — silence is
+    never consent.
+  - **Conversational review in Claude Code** — four MCP tools
+    (`memory_maintenance_run`, dry-run by default; `memory_maintenance_status`,
+    model-free; `memory_review_queue`; `memory_review_decide`) on the core
+    `lean-memory-mcp` server plus both console MCP surfaces, a
+    `review-memory-maintenance` MCP prompt, and a `/review-memory` plugin command
+    that walks the queue grouped by entity and records only explicit user
+    verdicts.
+  - **Tier-filtered retrieval** — default latest-mode search hides cold-demoted
+    facts; `as_of` queries never filter tier, and `search(..., include_cold=True)`
+    opts out. Promotion back to hot is explicit-only — reads never durably change
+    surfaces.
+  - **Schema v2** — `user_version`-gated 1→2 migration (v1-format files upgrade
+    in place, verified by a checked-in fixture) adding `record_kind`,
+    `fact_derivation` lineage, and the `maintenance_run` / `maintenance_proposal`
+    ledger tables. Two exact-no-op ingest hooks (duplicate-cascade,
+    summary-staleness cascade) keep offline transforms coherent under later
+    ingest; both are byte-identical no-ops until maintenance has ever run.
+  - **Concurrency & crash safety** — engine-wide `PRAGMA busy_timeout`, a
+    `batch()` unit-of-work, an atomic maintenance lease with heartbeat and
+    crash-resume, and `memory_clear` refusing while a live maintenance lease is
+    held. `LM_MAINT_AUTO=1` opts into a detached background auto-run on the first
+    tool call of a stale namespace (off by default).
+
 ## [0.1.3] - 2026-07-12
 
 Publish-readiness release: an independent multi-team review of v0.1.2 found
