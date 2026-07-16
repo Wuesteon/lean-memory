@@ -314,5 +314,8 @@ EXPECTED_SCHEMA_FINGERPRINT = (
     "a6c7f41188a196929ff4e7c257a181c100af9f0f7091aa93d428a9a7c0eec8ef"
 )
 EXPECTED_SANITIZER_FINGERPRINT = (
-    "dfef8699dd9519f2ef6592be577d25fdb2ae761e298d7063ced3323a14e2cf77"
+    # Bumped for WP10a Task 6: Memory._maintenance_store() reuses the identical
+    # `_SAFE_NS.sub("_", namespace) or "default"` expression (memory.py:298),
+    # adding a third matching line; sanitizer semantics unchanged, mirror valid.
+    "973f203a76ab1b535ae8e81dcb830145c92bf481cf4c815b5fbca0044e5d044c"
 )
