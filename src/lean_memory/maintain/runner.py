@@ -41,6 +41,7 @@ drives whatever store it is handed. Tests open that second/maintenance store dir
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -54,6 +55,19 @@ from .transforms import TransformReport, run_transforms
 # 10x the longest observed single-batch duration, whichever is larger) is abandoned
 # and may be taken over (§7.2).
 _STALE_FLOOR_S = 300.0  # 5 minutes
+
+
+class _NamespaceCleared(Exception):
+    """Internal control-flow signal: the namespace file vanished mid-run (§7.3).
+
+    Raised at a batch/heartbeat boundary when `os.path.exists(store.path)` is False —
+    memory_clear unlinked the DB while this run held (what was) a live lease. It is a
+    clean STOP, not an error: the run's already-committed batches are consistent; the
+    lease row died with the file, so there is nothing left to mark 'aborted' (§7.3).
+    Caught inside `run()`, which returns a normal RunReport with aborted_file_gone=True.
+    NEVER used for any other condition — only a genuinely missing file trips it, so it
+    can never mask a real error.
+    """
 
 
 @dataclass
@@ -77,6 +91,10 @@ class RunReport:
     cursor_id: Optional[str] = None
     config_hash: Optional[str] = None
     took_over_run_id: Optional[str] = None  # id of a stale run this run aborted, if any
+    # True iff the run stopped early because the namespace file vanished mid-run
+    # (memory_clear landed at/after a batch boundary — §7.3). Status stays 'ok': the
+    # run did its committed batches cleanly, then stopped when its DB was unlinked.
+    aborted_file_gone: bool = False
 
 
 def _heartbeat_is_fresh(live_run: dict, now_s: float, stale_after_s: float) -> bool:
@@ -90,6 +108,26 @@ def _heartbeat_is_fresh(live_run: dict, now_s: float, stale_after_s: float) -> b
         return False
     age_s = now_s - (hb / 1000.0)
     return age_s < stale_after_s
+
+
+def live_lease_is_fresh(store: Store, namespace: str, now_ms: int) -> bool:
+    """True iff `namespace` has a LIVE maintenance lease with a FRESH heartbeat (§7.2).
+
+    The single source of truth for "a maintenance run is actively holding this
+    namespace" — used by `memory_clear`'s refusal (§7.3). It reuses the runner's OWN
+    staleness rule: `get_live_run` finds the status='running' row, `_heartbeat_is_fresh`
+    against the 5-minute `_STALE_FLOOR_S` floor decides freshness. A stale or absent
+    lease returns False (the clear may proceed). The formula is NOT duplicated here.
+
+    A cheap read: the store is opened read-only by the caller and this issues one
+    indexed SELECT. `now_ms` is injectable so callers/tests never depend on wall time.
+    """
+    live = store.get_live_run(namespace)
+    if live is None:
+        return False
+    # A fresh CLI process has observed no batches, so the floor (5 min) applies —
+    # exactly the runner's own claim-time check for a lease it did not itself create.
+    return _heartbeat_is_fresh(live, now_ms / 1000.0, _STALE_FLOOR_S)
 
 
 def _proposal_fact_ids(proposal: dict) -> list[str]:
@@ -299,7 +337,7 @@ class MaintenanceRunner:
         return result["run_id"], None, result.get("took_over")
 
     # ── dry run (§6.3 — report-only, zero writes, no lease) ──
-    def dry_run(self) -> RunReport:
+    def dry_run(self, *, auto_only: bool = False) -> RunReport:
         """Compute the full would-do report with ZERO writes and NO lease (§6.3).
 
         A dry-run mutates nothing — no proposals, no auto transforms, not even a lease
@@ -308,6 +346,11 @@ class MaintenanceRunner:
         suppresses every store write and counts instead). The returned RunReport has
         status 'ok' and run_id=None (no ledger row exists). This is the `apply=False`
         default path for `Memory.maintain()` and the CLI/MCP tools.
+
+        `auto_only` (default False) mirrors the run() switch: report only the auto-band
+        would-do (no propose phases). It has no independent effect on writes — a dry-run
+        writes nothing regardless — but keeps the reported counts honest for a
+        `--auto-only` preview.
         """
         cfg_hash = self.config.config_hash()
         prior = self.store.last_finished_run(self.namespace)
@@ -335,7 +378,7 @@ class MaintenanceRunner:
         report = run_transforms(
             self.store, self.config, self._now_ms(), run_id="dry-run", slots=slots,
             summarizer=self.summarizer, extra_exclude_ids=exclude_ids,
-            pending_signatures=pending_sigs, dry_run=True,
+            pending_signatures=pending_sigs, dry_run=True, auto_only=auto_only,
         )
         stats["merges"] = len(report.merges)
         stats["staged"] = len(report.proposals)
@@ -349,18 +392,25 @@ class MaintenanceRunner:
 
     # ── the run ──
     def run(
-        self, *, on_batch: Optional[Callable[[], None]] = None, dry_run: bool = False
+        self,
+        *,
+        on_batch: Optional[Callable[[], None]] = None,
+        dry_run: bool = False,
+        auto_only: bool = False,
     ) -> RunReport:
         """Execute one maintenance run end to end (lease → thresholds → transforms).
 
         `on_batch` is a test hook invoked at every batch boundary (after the runner's
-        own heartbeat) — used by the heartbeat/crash tests to observe cadence and to
-        simulate a mid-run crash. Production passes None.
+        own heartbeat AND the namespace-cleared check) — used by the heartbeat/crash
+        tests to observe cadence and to simulate a mid-run crash or a mid-run clear.
+        Production passes None.
 
         `dry_run=True` delegates to `dry_run()` — report-only, zero writes, no lease.
+        `auto_only=True` runs ONLY the auto band (dedup_exact + evict auto), staging no
+        proposals (spec §6.1 `--auto-only`). Default False preserves all behavior.
         """
         if dry_run:
-            return self.dry_run()
+            return self.dry_run(auto_only=auto_only)
 
         cfg_hash = self.config.config_hash()
         claim_ms = self._now_ms()
@@ -373,7 +423,15 @@ class MaintenanceRunner:
         # (via the batch hook installed below) — the §7.2 "every batch commit and at
         # least every 30 s" cadence. The propose phase is bounded by
         # proposal_budget_per_run, so it never runs long without a phase-boundary beat.
+        #
+        # At each boundary we also check the namespace file still exists (§7.3): if
+        # memory_clear unlinked it mid-run, keep committing to a ghost inode would
+        # silently lose work, so we STOP cleanly (raise _NamespaceCleared, caught below).
+        # The check is a cheap os.path.exists on the store's own path; it fires ONLY on a
+        # genuinely missing file, so it can never mask a real error.
         def _beat() -> None:
+            if not os.path.exists(self.store.path):
+                raise _NamespaceCleared(self.store.path)
             self.store.heartbeat_run(run_id, self._now_ms())
             if on_batch is not None:
                 on_batch()
@@ -433,6 +491,7 @@ class MaintenanceRunner:
                     summarizer=self.summarizer,
                     extra_exclude_ids=exclude_ids,
                     pending_signatures=pending_sigs,
+                    auto_only=auto_only,
                 )
             finally:
                 self._uninstall_batch_hook()
@@ -444,6 +503,18 @@ class MaintenanceRunner:
             stats["dropped_proposals"] = report.dropped_proposals
             return self._finish_ok(run_id, stats, cursor_id, cfg_hash, took_over,
                                    below=False, report=report)
+        except _NamespaceCleared:
+            # memory_clear unlinked the DB mid-run (§7.3). This is a clean STOP, not an
+            # error: the run's already-committed batches are consistent, and the lease
+            # row died with the file — there is nothing left to mark 'aborted' (any
+            # write would just recreate a stray file). Report the clean stop; the
+            # already-committed transform work (if any) stands in `report`.
+            return RunReport(
+                status="ok", run_id=run_id, below_threshold=False,
+                threshold_stats=stats, transform_report=report,
+                cursor_id=cursor_id, config_hash=cfg_hash,
+                took_over_run_id=took_over, aborted_file_gone=True,
+            )
         except BaseException:
             # A failure DURING our run: mark our own row aborted (consistent DB per
             # per-batch commits) and re-raise. The next runner takes over from state.

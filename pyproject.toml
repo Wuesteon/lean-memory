@@ -76,6 +76,7 @@ dev = [
 
 [project.scripts]
 lean-memory-mcp = "lean_memory.mcp_server:main"
+lean-memory-maintain = "lean_memory.maintain.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Wuesteon/lean-memory"

@@ -316,6 +316,7 @@ class Memory:
         *,
         config: Optional[MaintenanceConfig] = None,
         apply: bool = False,
+        auto_only: bool = False,
         trigger: str = "cli",
         summarizer: Optional[Summarizer] = None,
     ) -> "RunReport":
@@ -327,6 +328,10 @@ class Memory:
         full would-do report with zero writes and takes no lease (a dry-run writes
         nothing, so it needs no lease). `apply=True` claims the lease, runs the auto
         band, and stages proposals.
+
+        `auto_only=True` (only meaningful with apply=True) runs ONLY the auto band and
+        stages NOTHING — the `--auto-only` CLI/auto-spawn switch (§6.1). Default False
+        preserves the full apply behavior (autos + proposals).
         """
         store = self._maintenance_store(namespace)
         try:
@@ -334,7 +339,7 @@ class Memory:
                 store, namespace, config=config, trigger=trigger,
                 summarizer=summarizer,
             )
-            return runner.run(dry_run=not apply)
+            return runner.run(dry_run=not apply, auto_only=auto_only)
         finally:
             store.close()
 

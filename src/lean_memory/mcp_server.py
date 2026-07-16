@@ -23,7 +23,9 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from .maintain import live_lease_is_fresh
 from .memory import _SAFE_NS, Memory
+from .types import now_ms
 
 
 def _data_root() -> Path:
@@ -136,12 +138,42 @@ def memory_search(namespace: str, query: str, k: int = 5) -> str:
 
 @mcp.tool()
 def memory_clear(namespace: str) -> str:
-    """Delete all memory for a namespace by removing its SQLite file. Irreversible."""
+    """Delete all memory for a namespace by removing its SQLite file. Irreversible.
+
+    Refuses (returns an explanatory message, changing nothing) while a LIVE maintenance
+    lease with a fresh heartbeat is held for the namespace (spec §7.3): a POSIX unlink
+    cannot safely interrupt an in-flight maintenance run — the run's open handle would
+    keep committing to the unlinked (ghost) inode, silently losing that work. So clear
+    waits for the run to finish or its lease to go stale. A stale or absent lease clears
+    normally; the maintenance runner itself independently skips a namespace cleared
+    mid-run at its next batch boundary.
+
+    Residual race (spec §7.3, known limitation): a clear that lands in the sliver
+    BETWEEN this lease-check and the unlink is not prevented — full cross-process file
+    locking is deliberately out of scope for v1. The two guards (this refusal + the
+    runner's batch-boundary skip) shrink the window; they do not close it.
+    """
+    path = _namespace_path(namespace)
+    # No file ⇒ nothing to clear and no lease possible. Opening a store here would
+    # CREATE the file, so short-circuit (unlink below is a no-op on missing files).
+    if path.exists():
+        # Cheap read: open a dedicated maintenance store on the file and ask the runner's
+        # own staleness rule whether a live lease is held (no raw SQL here — stdout must
+        # stay the JSON-RPC channel, and the store/runner own the query).
+        lease_store = _mem()._maintenance_store(namespace)
+        try:
+            if live_lease_is_fresh(lease_store, namespace, now_ms()):
+                return (
+                    f"refused: namespace '{namespace}' has a live maintenance run "
+                    "holding it; clear again once maintenance finishes."
+                )
+        finally:
+            lease_store.close()
+
     # Release any cached open connection so the file handle is freed before unlink.
     store = _mem()._stores.pop(namespace, None)
     if store is not None:
         store.close()
-    path = _namespace_path(namespace)
     for p in (path, path.with_suffix(".db-wal"), path.with_suffix(".db-shm")):
         p.unlink(missing_ok=True)
     return f"cleared namespace '{namespace}'"

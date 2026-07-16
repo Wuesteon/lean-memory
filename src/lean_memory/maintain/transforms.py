@@ -494,6 +494,7 @@ def run_transforms(
     extra_exclude_ids: Optional[set[str]] = None,
     pending_signatures: Optional[dict[str, set[frozenset[str]]]] = None,
     dry_run: bool = False,
+    auto_only: bool = False,
 ) -> TransformReport:
     """Run all four transforms in the spec-mandated intra-run order (§4.4).
 
@@ -503,6 +504,12 @@ def run_transforms(
     referenced by a staged proposal. The global proposal budget
     (`proposal_budget_per_run`) is shared across the three propose transforms;
     truncation is REPORTED in `dropped_proposals`, never silent.
+
+    `auto_only` (default False, preserving all existing behavior/tests): skip the
+    Phase-1 propose transforms entirely and run ONLY the auto band (dedup_exact,
+    evict auto-band). This is the `--auto-only` CLI switch (spec §6.1): apply the
+    provably-safe transforms, stage NOTHING. With no staged proposals, the auto
+    phase's exclusion set is just the prior-run pending ids (`extra_exclude_ids`).
 
     `slots` is materialized once (the pre-transform snapshot of touched slots) and
     reused for both the near-dup proposals and the exact-dup autos.
@@ -528,33 +535,35 @@ def run_transforms(
     report = TransformReport()
 
     # ── Phase 1: STAGE ALL PROPOSALS over the pre-transform snapshot ──
-    budget = config.proposal_budget_per_run
-    remaining = budget
+    # Skipped entirely under `auto_only` (--auto-only): stage NOTHING, run only autos.
+    if not auto_only:
+        budget = config.proposal_budget_per_run
+        remaining = budget
 
-    near, dropped = dedup_near(
-        store, config, now, slots, run_id=run_id, budget=remaining,
-        skip_signatures=pending_signatures.get("dedup_near"), dry_run=dry_run,
-    )
-    report.proposals.extend(near)
-    report.dropped_proposals += dropped
-    remaining = budget - len(report.proposals)
+        near, dropped = dedup_near(
+            store, config, now, slots, run_id=run_id, budget=remaining,
+            skip_signatures=pending_signatures.get("dedup_near"), dry_run=dry_run,
+        )
+        report.proposals.extend(near)
+        report.dropped_proposals += dropped
+        remaining = budget - len(report.proposals)
 
-    summ, dropped = summarize(
-        store, config, now, summarizer, run_id=run_id, budget=max(0, remaining),
-        skip_signatures=pending_signatures.get("summarize"), dry_run=dry_run,
-    )
-    report.proposals.extend(summ)
-    report.dropped_proposals += dropped
-    remaining = budget - len(report.proposals)
+        summ, dropped = summarize(
+            store, config, now, summarizer, run_id=run_id, budget=max(0, remaining),
+            skip_signatures=pending_signatures.get("summarize"), dry_run=dry_run,
+        )
+        report.proposals.extend(summ)
+        report.dropped_proposals += dropped
+        remaining = budget - len(report.proposals)
 
-    # A fact referenced by a prior-run pending proposal is never re-proposed for
-    # eviction (excluding its id covers both re-propose and auto-demote — §4.4).
-    ev_prop, dropped = evict_propose(
-        store, config, now, run_id=run_id, budget=max(0, remaining),
-        exclude_ids=extra_exclude_ids, dry_run=dry_run,
-    )
-    report.proposals.extend(ev_prop)
-    report.dropped_proposals += dropped
+        # A fact referenced by a prior-run pending proposal is never re-proposed for
+        # eviction (excluding its id covers both re-propose and auto-demote — §4.4).
+        ev_prop, dropped = evict_propose(
+            store, config, now, run_id=run_id, budget=max(0, remaining),
+            exclude_ids=extra_exclude_ids, dry_run=dry_run,
+        )
+        report.proposals.extend(ev_prop)
+        report.dropped_proposals += dropped
 
     # ── Phase 2: AUTO transforms, EXCLUDING every staged-proposal target ──
     # This run's staged ids UNION prior runs' still-pending referenced ids: neither a
