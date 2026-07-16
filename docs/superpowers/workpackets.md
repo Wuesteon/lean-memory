@@ -40,7 +40,7 @@ on the same files).
 | WP7 Async API | `wp7-async` | A | WP4–WP6 | six-week read | open |
 | WP8 Integrations & distribution wave | `wp8-*` (per sub-packet) | C | WP0 | six-week read (spec §5) | open |
 | WP9 NLI middle tier (contingent) | `wp9-nli-resolver` | A | WP0 | **contingent** — see trigger | open |
-| WP10a Sleep-time maintenance (engine + MCP review) | `wp10a-sleep-maintenance` | A | WP1 | — (conscious post-launch addition, recorded 2026-07-16) | **implementation COMPLETE** on `wp10a-sleep-maintenance` (2026-07-16: all 9 plan tasks done; core + console suites green) — awaiting final whole-branch review + merge; **merge remains gated on WP1 launch** |
+| WP10a Sleep-time maintenance (engine + MCP review) | `wp10a-sleep-maintenance` | A | WP1 | — (conscious post-launch addition, recorded 2026-07-16) | **MERGED** (2026-07-17: PR #3 → main d93b326; core 282 + console 138 green on merged main; final whole-branch review 0 Critical / 0 Important; merged ahead of WP1 by conscious user decision — safe: feature default-off, first-run path pinned byte-identical. WP10b unblocked; its carry-ins recorded in its section) |
 | WP10b Maintenance review UI | `wp10b-review-ui` | D | WP10a | — | open |
 | Memory UI | `worktree-memory-ui` | D | — | — | **MERGED** (2026-07-14: PR #2 → main 9d840b6; console 125 + core 141 green on merged main; lane D released) |
 
