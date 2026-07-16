@@ -21,6 +21,7 @@ from .engine import EngineGateway
 from .events import EventLog
 from .routes.data import build_data_router
 from .routes.mcp import build_mcp_mount
+from .routes.review import build_review_router
 from .routes.views import build_views_router
 
 # Loopback hostnames accepted in local mode (DNS-rebinding guard). Exact-match
@@ -106,6 +107,10 @@ def create_app(
         return response
 
     app.include_router(build_views_router())
+    # /views/*/review + /views/*/maintenance — per-route auth-gated, same prefix
+    # as views; registered before the static catch-all so its greedy "/" mount
+    # never shadows these paths.
+    app.include_router(build_review_router())
     # /v1/* are POST handlers reading app.state.gateway; gate the whole router
     # with the same auth dependency (local token / docker bearer).
     app.include_router(
