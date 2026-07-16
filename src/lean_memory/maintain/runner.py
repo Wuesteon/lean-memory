@@ -216,27 +216,6 @@ class MaintenanceRunner:
         }
         return (by_facts or by_salience or by_age), stats
 
-    # ── prior finished run (previous cursor + last-run age) ──
-    def _last_finished_run(self) -> Optional[dict]:
-        """The most recent status='ok' run row for the namespace, or None.
-
-        `list_proposals` is proposals; for runs we read the ledger directly through the
-        store's own query surface. There is no `list_runs` verb (Task 2 exposed only
-        the create/heartbeat/finish/get-live half), so the runner reads the ledger via
-        the concrete store — documented coupling, isolated to this one accessor.
-        """
-        # Prefer a public accessor if a future store grows one; today we read the row
-        # via the concrete SqliteStore's connection (the only Store impl).
-        db = getattr(self.store, "_db", None)
-        if db is None:  # pragma: no cover - non-sqlite store
-            return None
-        row = db.execute(
-            "SELECT * FROM maintenance_run WHERE namespace=? AND status='ok' "
-            "ORDER BY finished_at DESC, id DESC LIMIT 1",
-            (self.namespace,),
-        ).fetchone()
-        return dict(row) if row else None
-
     # ── cross-run exclusion (§4.4) ──
     def _prior_pending(self):
         """(exclude_ids, pending_signatures) from prior-run still-pending proposals.
@@ -265,33 +244,59 @@ class MaintenanceRunner:
         - No live lease          -> claim: (run_id, None, None).
         - Lost race on INSERT     -> (None, 'lost race', None): a concurrent claimer won.
 
-        The `create_run` INSERT is the atomic claim (ux_run_live); a second live INSERT
-        raises IntegrityError — caught here as the lost-race path (§7.2).
+        Spec §7.2 binds the whole sequence as ONE transaction:
+        `BEGIN IMMEDIATE → check live-heartbeat row → (optional) abort stale → INSERT
+        (loser hits ux_run_live) → COMMIT`. `store.batch()` supplies the BEGIN IMMEDIATE
+        and single COMMIT, suppressing the CRUD verbs' per-call commits so
+        get_live_run/finish_run/create_run all land in the one transaction. The
+        create_run INSERT is the atomic claim; a second live INSERT raises
+        IntegrityError — batch's __exit__ rolls the whole transaction back first, THEN
+        we catch it OUTSIDE the batch context and return the lost-race skip.
         """
         import sqlite3
 
-        took_over: Optional[str] = None
+        # Fresh-lease skip must NOT open a write transaction — read first, and only if a
+        # takeover/claim is actually warranted do we enter BEGIN IMMEDIATE. The batch
+        # below re-reads under the write lock (the authoritative §7.2 check); this
+        # pre-check just short-circuits the common held-lease case cheaply.
         live = self.store.get_live_run(self.namespace)
-        if live is not None:
-            now_s = now_ms / 1000.0
-            if _heartbeat_is_fresh(live, now_s, self._stale_after_s()):
-                return None, "lease held", None
-            # Stale: mark it 'aborted' (takeover NEVER rolls anything back — §7.2/§7.4)
-            # then fall through to claim. finish_run on a live row clears status=
-            # 'running', releasing ux_run_live so our claim can succeed.
-            self.store.finish_run(
-                live["id"], "aborted", now_ms, None, live.get("cursor_id")
-            )
-            took_over = live["id"]
+        if live is not None and _heartbeat_is_fresh(
+            live, now_ms / 1000.0, self._stale_after_s()
+        ):
+            return None, "lease held", None
 
+        # One transaction (§7.2): BEGIN IMMEDIATE → check → optional stale-abort →
+        # INSERT claim → COMMIT. batch() suppresses the CRUD verbs' per-call commits so
+        # they co-commit; IntegrityError on the INSERT is caught OUTSIDE the batch, after
+        # __exit__ has rolled the whole transaction back.
+        result: dict = {}
         try:
-            run_id = self.store.create_run(
-                self.namespace, self.trigger, now_ms, self.config.config_hash()
-            )
+            with self.store.batch():
+                live = self.store.get_live_run(self.namespace)
+                if live is not None:
+                    if _heartbeat_is_fresh(
+                        live, now_ms / 1000.0, self._stale_after_s()
+                    ):
+                        # Became fresh between the pre-check and the lock: abandon the
+                        # claim (the write-free transaction commits empty on return).
+                        return None, "lease held", None
+                    # Stale: mark it 'aborted' in the SAME transaction. Takeover NEVER
+                    # rolls anything back (§7.2/§7.4) — the prior run's own work is
+                    # already durably committed; this only clears status='running' to
+                    # release ux_run_live for the claim below.
+                    self.store.finish_run(
+                        live["id"], "aborted", now_ms, None, live.get("cursor_id")
+                    )
+                    result["took_over"] = live["id"]
+                # The atomic claim: a concurrent live row makes this raise IntegrityError.
+                result["run_id"] = self.store.create_run(
+                    self.namespace, self.trigger, now_ms, self.config.config_hash()
+                )
         except sqlite3.IntegrityError:
-            # A concurrent claimer inserted a live row between our check and INSERT.
+            # __exit__ already rolled back the whole transaction (including any
+            # stale-abort UPDATE), leaving the concurrent claimer's live row intact.
             return None, "lost race", None
-        return run_id, None, took_over
+        return result["run_id"], None, result.get("took_over")
 
     # ── the run ──
     def run(self, *, on_batch: Optional[Callable[[], None]] = None) -> RunReport:
@@ -322,24 +327,30 @@ class MaintenanceRunner:
         report: Optional[TransformReport] = None
         below = False
         try:
-            prior = self._last_finished_run()
+            prior = self.store.last_finished_run(self.namespace)
             previous_cursor = prior.get("cursor_id") if prior else None
             last_finished_at = prior.get("finished_at") if prior else None
 
             over, threshold_stats = self._threshold_check(previous_cursor, last_finished_at)
             stats = dict(threshold_stats)
 
-            # Advance-before-write: snapshot the cursor high-water NOW, before any
-            # transform output is written (§6.6). On a no-op we still record it so the
-            # next run's delta is measured from here.
-            cursor_id = self._max_fact_id()
-
             if not over:
                 below = True
                 stats["below_threshold"] = True
-                # Cheap no-op: no transforms, no proposals. Release with 'ok'.
+                # A below-threshold run does NO work, so it must PRESERVE the cursor of
+                # the last run that did (§6.6). Advancing it would strand an un-processed
+                # duplicate on a quiet slot: the next real run scans
+                # iter_slots_touched_since(previous_cursor) and still sees it. Carry the
+                # previous ok-run's cursor forward unchanged (None on a first no-op).
+                cursor_id = previous_cursor
                 return self._finish_ok(run_id, stats, cursor_id, cfg_hash, took_over,
                                        below=True, report=None)
+
+            # Advance-before-write: snapshot the cursor high-water NOW, before any
+            # transform output is written (§6.6). Only a run that DOES work advances the
+            # cursor — the run's own later outputs (summaries, maintenance episodes) get
+            # higher ids and fall after this snapshot, excluded from the next delta.
+            cursor_id = self._max_fact_id()
 
             # Over threshold: run the transform phase under a heartbeat cadence.
             _beat()  # heartbeat at the phase boundary

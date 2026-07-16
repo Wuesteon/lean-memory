@@ -186,6 +186,13 @@ class Store(ABC):
         ux_run_live enforces it.)"""
 
     @abstractmethod
+    def last_finished_run(self, namespace: str) -> Optional[dict]:
+        """The most recent status='ok' run row for a namespace as a dict, or None.
+        Newest first by (finished_at, id). Pure read — the runner's previous-cursor +
+        last-run-age source (§6.6). Excludes 'aborted'/'running' rows: a run that did no
+        work (aborted) must not advance the cursor another run reasons from."""
+
+    @abstractmethod
     def stage_proposal(
         self,
         run_id: str,

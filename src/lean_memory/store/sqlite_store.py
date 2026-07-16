@@ -606,6 +606,17 @@ class SqliteStore(Store):
         ).fetchone()
         return dict(row) if row else None
 
+    def last_finished_run(self, namespace: str) -> Optional[dict]:
+        # Most recent status='ok' run — the runner's previous-cursor + last-run-age
+        # source (§6.6). 'aborted'/'running' rows are excluded so a no-work run never
+        # advances the cursor another run reasons from. Pure read.
+        row = self._db.execute(
+            "SELECT * FROM maintenance_run WHERE namespace=? AND status='ok' "
+            "ORDER BY finished_at DESC, id DESC LIMIT 1",
+            (namespace,),
+        ).fetchone()
+        return dict(row) if row else None
+
     def stage_proposal(
         self,
         run_id: str,

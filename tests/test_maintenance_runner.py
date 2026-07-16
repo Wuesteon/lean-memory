@@ -255,6 +255,38 @@ def test_lost_race_integrity_error_path(store, monkeypatch):
     assert rep.skipped_reason == "lost race"
 
 
+def test_lease_claim_is_one_transaction_abort_rolls_back_on_failed_insert(store, monkeypatch):
+    """The §7.2 sequence (check → stale-abort → INSERT) is ONE transaction: if the claim
+    INSERT fails (IntegrityError), the stale-abort UPDATE in the same transaction MUST
+    roll back too — the prior run stays 'running', not stranded 'aborted'.
+
+    This is the behavioral fingerprint of single-transaction semantics: three separate
+    autocommit statements would leave the prior run permanently aborted (a lost lease).
+    """
+    import sqlite3
+
+    clock = Clock()
+    # A stale live run (heartbeat 10 min old → past the 300s floor).
+    stale_id = store.create_run("ns", "cli", clock.now_ms(), _cfg().config_hash())
+    store.heartbeat_run(stale_id, clock.now_ms())
+    clock.advance(10 * 60)
+
+    r = MaintenanceRunner(store, "ns", _cfg(), clock=clock, now_ms=clock.now_ms)
+    # The claim INSERT loses a race (a concurrent process claimed) → IntegrityError.
+    def _boom(*a, **k):
+        raise sqlite3.IntegrityError("UNIQUE constraint failed: ux_run_live")
+    monkeypatch.setattr(store, "create_run", _boom)
+
+    rep = r.run()
+    assert rep.status == "skipped"
+    assert rep.skipped_reason == "lost race"
+    # The stale run's abort was rolled back with the failed INSERT — still 'running'.
+    status = store._db.execute(
+        "SELECT status FROM maintenance_run WHERE id=?", (stale_id,)
+    ).fetchone()["status"]
+    assert status == "running", "abort+claim not atomic — the abort UPDATE leaked"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Work thresholds (§6.6)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -368,6 +400,54 @@ def test_cursor_gap_duplicate_on_quiet_slot_deduped_next_run(store):
     after = [f for f in store.find_latest_in_slot(orig.subject_id, "works_at")]
     assert len(after) == 1, "the cursor-gap duplicate was deduped"
     assert after[0].id == orig.id  # survivor = argmin(valid_at) = the original
+
+
+def test_below_threshold_noop_preserves_cursor_so_quiet_dup_survives(store):
+    """A below-threshold no-op must NOT advance the cursor (§6.6 regression).
+
+    Otherwise it strands an un-processed duplicate on a quiet slot: run 1 dedups with
+    cursor C1; a duplicate D lands on quiet slot Q (id > C1); a below-threshold run
+    would advance the cursor to C2 > D.id without processing Q; a later real run scans
+    iter_slots_touched_since(C2) and NEVER sees Q. Preserving C1 across the no-op keeps
+    Q in the next real run's scan window, so D is eventually deduped.
+    """
+    clock = Clock()
+    orig = _add(store, "Acme Corp", predicate="works_at", valid_at=NOW - 400 * MS_PER_DAY)
+
+    # Run 1 (first-ever, over threshold): finishes with cursor C1 = current high-water.
+    r1 = MaintenanceRunner(store, "ns", _cfg(), clock=clock, now_ms=clock.now_ms)
+    rep1 = r1.run()
+    assert rep1.status == "ok"
+    c1 = rep1.cursor_id
+
+    # A single duplicate lands on the quiet slot AFTER C1 — one new fact is BELOW the
+    # facts threshold (min_new_facts=3) and salience is capped out, so the very next run
+    # is a no-op.
+    dup = _add(store, "Acme Corp", predicate="works_at", valid_at=clock.now_ms())
+    assert dup.id > c1
+
+    # The below-threshold no-op run: recent last run (age won't trip), 1 new fact
+    # (< min_new_facts), high salience floor (won't trip).
+    r2 = MaintenanceRunner(store, "ns", _cfg(min_new_salience=1e12), clock=clock, now_ms=clock.now_ms)
+    rep2 = r2.run()
+    assert rep2.status == "ok"
+    assert rep2.below_threshold is True
+    # THE FIX: the no-op preserved the last work-doing run's cursor (C1), not the
+    # post-D high-water — so slot Q stays in the next run's scan window.
+    assert rep2.cursor_id == c1
+    # The duplicate is still un-deduped (the no-op did no work).
+    assert len(store.find_latest_in_slot(orig.subject_id, "works_at")) == 2
+
+    # A later over-threshold run (age trips after 8 days) MUST still see slot Q via
+    # iter_slots_touched_since(C1) and dedup D.
+    clock.advance(8 * 24 * 3600)
+    r3 = MaintenanceRunner(store, "ns", _cfg(min_new_salience=1e12), clock=clock, now_ms=clock.now_ms)
+    rep3 = r3.run()
+    assert rep3.status == "ok"
+    assert rep3.below_threshold is False
+    after = store.find_latest_in_slot(orig.subject_id, "works_at")
+    assert len(after) == 1, "the quiet-slot duplicate survived the no-op and was deduped"
+    assert after[0].id == orig.id
 
 
 def test_cursor_advances_before_transform_output(store):
