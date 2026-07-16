@@ -40,6 +40,28 @@ Implementation status, design decisions, benchmark results, and known limitation
 | MCP server | ✅ | `memory_add` / `memory_search` / `memory_clear` via FastMCP (stdio transport) |
 | Terminal demo agent | ✅ | `examples/chat.py` — full add→retrieve→supersede loop with Claude |
 
+### Phase 3 — Sleep-Time Maintenance
+
+Offline "sleep-time" job that cleans up stored memory between sessions, with a
+staged human-review queue. Preserves the ADD-only spine and as-of semantics
+(§3.1 visibility theorem incl. ingest commutation) — nothing is ever deleted.
+Default-off, post-launch; no change to the first-run path. Design:
+`docs/superpowers/specs/2026-07-16-sleep-time-maintenance-design.md`.
+
+| Component | Status | Notes |
+|---|---|---|
+| Store verbs + `batch()` + `busy_timeout` | ✅ | `retire_duplicate`/`set_tier`/`iter_*` + unit-of-work; engine-wide busy_timeout (dedicated maintenance store at 5000 ms) |
+| Schema v2 (user_version-gated 1→2 migration) | ✅ | `record_kind`, `fact_derivation`, `maintenance_run`/`maintenance_proposal` ledger; v1 fixture + upgrade round-trip test |
+| Two ingest hooks (commutation) | ✅ | duplicate-cascade + summary-staleness cascade; exact no-ops until maintenance has ever run |
+| DEDUP-EXACT / EVICT auto-band | ✅ | the only auto-applied transforms — as-of-safe in isolation and under later ingest |
+| DEDUP-NEAR / SUMMARIZE / EVICT proposals | ✅ | judgment calls staged for human review; extractive stub default, `[llm]` Ollama opt-in; unreviewed proposals expire (30d) |
+| Runner + lease + `MaintenanceConfig` | ✅ | atomic lease, heartbeat, work thresholds, cursor, crash-resume; frozen-dataclass config hashed per run |
+| Proposal lifecycle | ✅ | CAS decide, one-transaction apply with target re-validation, stale-target + timeout expiry, explicit-only promotion |
+| Tier-filtered retrieval | ✅ | default latest-mode hides cold; `as_of` never filters tier; `include_cold=True` opts out |
+| `lean-memory-maintain` CLI + cron recipe | ✅ | dry-run default; `--apply`/`--auto-only`/`--json`; core package, no console dependency |
+| MCP tools ×4 + prompt + plugin command | ✅ | `memory_maintenance_run/_status`, `memory_review_queue/_decide` on all three MCP surfaces; `review-memory-maintenance` prompt + `/review-memory` command; opt-in auto-spawn (`LM_MAINT_AUTO=1`) |
+| Console Review UI (WP10b) | ⬜ | next-morning click-through page — separate packet, starts after this merges |
+
 ### Phase 2 — Next
 
 | Item | Status |

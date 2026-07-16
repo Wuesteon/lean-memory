@@ -64,3 +64,49 @@ async def test_reserved_namespace_rejected(wrapper):
     with pytest.raises(Exception) as excinfo:
         await mcp.call_tool("memory_add", {"namespace": "_events", "text": "x"})
     assert "reserved" in str(excinfo.value).lower()
+
+
+# ── maintenance tools + review prompt on the stdio wrapper (§6.3, §6.4) ────────
+@pytest.mark.anyio
+async def test_maintenance_run_dry_by_default(wrapper):
+    mcp, _root = wrapper
+    await mcp.call_tool("memory_add", {"namespace": "proj", "text": "Frank owns a red car."})
+    out = _unwrap(await mcp.call_tool("memory_maintenance_run", {"namespace": "proj"}))
+    assert out["mode"] == "dry-run"
+
+
+@pytest.mark.anyio
+async def test_review_queue_tool_returns_groups(wrapper):
+    mcp, _root = wrapper
+    out = _unwrap(await mcp.call_tool("memory_review_queue", {"namespace": "empty"}))
+    # No proposals staged for a fresh namespace → an empty groups list, not an error.
+    assert out["groups"] == []
+
+
+@pytest.mark.anyio
+async def test_maintenance_status_tool_shape(wrapper):
+    mcp, _root = wrapper
+    out = _unwrap(await mcp.call_tool("memory_maintenance_status", {"namespace": "fresh"}))
+    # Model-free ledger read, same shape as the core server's status.
+    assert out["namespace"] == "fresh"
+    assert out["runs"] == 0
+    assert out["pending_proposals"] == 0
+    assert out["last_run"] is None
+
+
+def test_review_prompt_is_registered(wrapper):
+    mcp, _root = wrapper
+    names = {p.name for p in mcp._prompt_manager.list_prompts()}
+    assert "review-memory-maintenance" in names
+
+
+@pytest.mark.anyio
+async def test_review_prompt_forbids_agent_deciding(wrapper):
+    mcp, _root = wrapper
+    rendered = await mcp.get_prompt("review-memory-maintenance", {"namespace": "proj"})
+    text = " ".join(
+        m.content.text for m in rendered.messages if hasattr(m.content, "text")
+    ).lower()
+    # The hard rule: no agent-initiated decisions without an explicit user verdict.
+    assert "may not decide" in text or "explicit user verdict" in text
+    assert "silence is not consent" in text

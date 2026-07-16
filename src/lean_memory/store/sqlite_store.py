@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Iterator, Optional, Sequence
 
 import numpy as np
 from sqlite_vec import serialize_float32
 
-from ..types import Entity, Episode, Fact
+from ..types import Entity, Episode, Fact, new_id
 from .base import Store
 from .schema import SCHEMA_SQL
 
@@ -40,10 +41,21 @@ def _serialize(vec: np.ndarray) -> bytes:
 
 
 class SqliteStore(Store):
-    def __init__(self, path: str | Path, *, dim: int = 768, coarse_dim: int = 256) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        dim: int = 768,
+        coarse_dim: int = 256,
+        busy_timeout_ms: int = 1500,
+    ) -> None:
         self.path = str(path)
         self.dim = dim
         self.coarse_dim = coarse_dim
+        # Lock budget (§7.1): 1500 ms serving default; maintenance opens with 5000.
+        self.busy_timeout_ms = busy_timeout_ms
+        # When True, per-call commits are suppressed — set only inside batch().
+        self._in_batch = False
         self._db = self._connect()
         self._init_schema()
 
@@ -58,18 +70,66 @@ class SqliteStore(Store):
         db.enable_load_extension(False)
         db.execute("PRAGMA journal_mode=WAL")  # better single-writer concurrency
         db.execute("PRAGMA foreign_keys=ON")
+        db.execute(f"PRAGMA busy_timeout={int(self.busy_timeout_ms)}")
         return db
+
+    # ── commit routing (single choke point for batch suppression) ──
+    def _commit(self) -> None:
+        """Every mutator commits through here so batch() can suppress it in ONE place.
+        Inside a batch window the commit is deferred to the single COMMIT at exit."""
+        if not self._in_batch:
+            self._db.commit()
+
+    @contextmanager
+    def batch(self) -> Iterator[None]:
+        """Atomic unit-of-work (§4.0): BEGIN IMMEDIATE, suppress per-call commits, one
+        COMMIT at exit, ROLLBACK on exception. execute() only — executescript() would
+        implicitly commit and break atomicity. Not re-entrant (a nested batch is a bug)."""
+        if self._in_batch:
+            raise RuntimeError("batch() is not re-entrant")
+        self._db.execute("BEGIN IMMEDIATE")
+        self._in_batch = True
+        try:
+            yield
+        except BaseException:
+            self._in_batch = False
+            self._db.rollback()
+            raise
+        else:
+            self._in_batch = False
+            self._db.commit()
 
     def _init_schema(self) -> None:
         self._check_existing_dims()
+        # Always-run blob: every statement is CREATE ... IF NOT EXISTS, so it is a
+        # no-op on an already-created DB (fresh or migrated) and creates the v2
+        # tables/indexes on any DB that lacks them.
         sql = SCHEMA_SQL.format(dim=self.dim, coarse_dim=self.coarse_dim)
         self._db.executescript(sql)
+
         # Schema-version stamp — the migration anchor for future releases.
         # Version 1 == the 0.1.x layout; pre-stamp files (0.1.0–0.1.2, version 0)
-        # have an identical schema and are upgraded in place. Never write over a
+        # have an identical spine and are treated as version 1. Never write over a
         # NEWER release's stamp.
-        if self._db.execute("PRAGMA user_version").fetchone()[0] == 0:
+        version = self._db.execute("PRAGMA user_version").fetchone()[0]
+        if version == 0:
+            version = 1
             self._db.execute("PRAGMA user_version = 1")
+
+        # ── Versioned migrations. Each branch runs the NON-idempotent DDL for its
+        # version exactly once, keyed off user_version. A fresh DB is version 1
+        # here (just stamped above), so it flows through the same `< 2` branch and
+        # gains record_kind via the SAME ALTER — there is no separate fresh path.
+        # ADD COLUMN is not idempotent (raises 'duplicate column name' on reopen),
+        # so it MUST live here and never in the always-run blob.
+        if version < 2:
+            self._db.execute(
+                "ALTER TABLE fact ADD COLUMN record_kind TEXT NOT NULL "
+                "DEFAULT 'fact'"  # 'fact'|'summary'
+            )
+            self._db.execute("PRAGMA user_version = 2")
+            version = 2
+
         self._db.commit()
 
     def _check_existing_dims(self) -> None:
@@ -111,7 +171,7 @@ class SqliteStore(Store):
             (episode.id, episode.namespace, episode.raw, episode.source,
              episode.t_ref, episode.created_at),
         )
-        self._db.commit()
+        self._commit()
 
     # ── entities ──
     def upsert_entity(self, entity: Entity) -> Entity:
@@ -127,7 +187,7 @@ class SqliteStore(Store):
             (entity.id, entity.namespace, entity.name, entity.type,
              entity.summary, entity.resolved_id, entity.created_at),
         )
-        self._db.commit()
+        self._commit()
         return entity
 
     def get_entity(self, entity_id: str) -> Optional[Entity]:
@@ -143,15 +203,15 @@ class SqliteStore(Store):
                  valid_at, valid_to, superseded_by, is_latest,
                  ingested_at, expired_at, invalidated_by,
                  confidence, salience, last_access, access_count, is_inference, tier,
-                 episode_id, created_at)
-               VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?,?,?, ?,?)""",
+                 record_kind, episode_id, created_at)
+               VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?,?,?, ?,?,?)""",
             (fact.id, fact.namespace, fact.subject_id, fact.predicate, fact.object_id,
              fact.object_literal, fact.fact_text,
              fact.valid_at, fact.valid_to, fact.superseded_by, fact.is_latest,
              fact.ingested_at, fact.expired_at, fact.invalidated_by,
              fact.confidence, fact.salience, fact.last_access, fact.access_count,
              fact.is_inference, fact.tier,
-             fact.episode_id, fact.created_at),
+             fact.record_kind, fact.episode_id, fact.created_at),
         )
         db.execute(
             "INSERT INTO fact_vec(fact_id, namespace, is_latest, tier, embedding, embedding_256) "
@@ -163,9 +223,30 @@ class SqliteStore(Store):
             "INSERT INTO fact_fts(fact_id, fact_text) VALUES (?,?)",
             (fact.id, fact.fact_text),
         )
-        db.commit()
+        self._commit()
 
-    def supersede_fact(self, old_fact_id: str, new_fact_id: str, valid_to: int) -> None:
+    def supersede_fact(
+        self, old_fact_id: str, new_fact_id: str, valid_to: int
+    ) -> list[str]:
+        """Close `old` at world-time `valid_to`, cascade-close its OPEN retired
+        duplicates at the same V, and return the full closed-id list.
+
+        Ingest hook 1 — DUPLICATE-CASCADE (§4.0): retire_duplicate leaves a
+        duplicate with superseded_by=survivor but valid_to NULL (verb (c), as-of
+        safe at dedup time). Such an open duplicate is invisible to
+        find_latest_in_slot, so ordinary ingest supersession never closes it —
+        after the survivor is superseded it would resurrect as a permanently-open
+        interval on the pure as-of surface (empirically demonstrated wrong answer,
+        §14). Closing `WHERE superseded_by=old AND valid_to IS NULL` at the same V
+        restores commutation. A SINGLE level suffices because retire_duplicate's
+        chain invariant keeps every open duplicate pointing DIRECTLY at the live
+        survivor (§4.0) — no recursion. Whole thing is ONE transaction.
+
+        RETURNS [old_id] + cascade-closed ids so the summary-staleness cascade
+        (§4.3) keys on every closed row, not just the explicit target — the
+        cascade-closed ids are collected by SELECT before the UPDATE (rev-3 seam
+        fix). No-op cascade until retire_duplicate has produced such rows.
+        """
         db = self._db
         db.execute(
             "UPDATE fact SET superseded_by=?, valid_to=?, is_latest=0 WHERE id=?",
@@ -173,7 +254,69 @@ class SqliteStore(Store):
         )
         # keep the vec0 metadata filter column in sync so superseded facts drop out
         db.execute("UPDATE fact_vec SET is_latest=0 WHERE fact_id=?", (old_fact_id,))
-        db.commit()
+        # Duplicate-cascade: collect the open retired duplicates FIRST (for the
+        # returned set), then close them at the same V — same transaction.
+        cascade_ids = [
+            r["id"]
+            for r in db.execute(
+                "SELECT id FROM fact WHERE superseded_by=? AND valid_to IS NULL",
+                (old_fact_id,),
+            ).fetchall()
+        ]
+        if cascade_ids:
+            db.execute(
+                "UPDATE fact SET valid_to=? WHERE superseded_by=? AND valid_to IS NULL",
+                (valid_to, old_fact_id),
+            )
+        self._commit()
+        return [old_fact_id, *cascade_ids]
+
+    # ── derivation lineage + staleness cascade support (schema v2; §4.3) ──
+    def add_derivation(
+        self, summary_id: str, source_id: str, run_id: str, created_at: int
+    ) -> None:
+        """Record one summary←source lineage edge (fact_derivation). The staleness
+        cascade reads these via ix_derivation_source to find summaries to invalidate
+        when a source is closed by ingest (§4.3). INSERT OR IGNORE keeps the
+        (summary_id, source_id) PK idempotent."""
+        self._db.execute(
+            "INSERT OR IGNORE INTO fact_derivation(summary_id, source_id, run_id, created_at) "
+            "VALUES (?,?,?,?)",
+            (summary_id, source_id, run_id, created_at),
+        )
+        self._commit()
+
+    def find_summaries_derived_from(self, source_ids: Sequence[str]) -> list[str]:
+        """DISTINCT still-latest summary ids derived from any of `source_ids` — the
+        staleness cascade's lookup (§4.3), served by ix_derivation_source. Restricted
+        to is_latest=1 so the caller never re-invalidates an already-retired summary."""
+        ids = list(source_ids)
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        rows = self._db.execute(
+            f"""SELECT DISTINCT d.summary_id AS summary_id
+                FROM fact_derivation d JOIN fact f ON f.id = d.summary_id
+                WHERE d.source_id IN ({placeholders}) AND f.is_latest = 1""",
+            ids,
+        ).fetchall()
+        return [r["summary_id"] for r in rows]
+
+    def invalidate_summary(
+        self, summary_id: str, valid_to: int, invalidated_by: str
+    ) -> None:
+        """Ingest hook 2 write — retire a summary stale-invalidated by live ingest
+        (§4.3): is_latest=0, valid_to, invalidated_by on fact + is_latest=0 mirror on
+        fact_vec, one txn. Scoped to is_latest=1 so a re-fire is a no-op. As-of
+        windows [t_a, valid_to) still show it — accurate: it was the believed state."""
+        db = self._db
+        db.execute(
+            "UPDATE fact SET is_latest=0, valid_to=?, invalidated_by=? "
+            "WHERE id=? AND is_latest=1",
+            (valid_to, invalidated_by, summary_id),
+        )
+        db.execute("UPDATE fact_vec SET is_latest=0 WHERE fact_id=?", (summary_id,))
+        self._commit()
 
     def get_fact(self, fact_id: str) -> Optional[Fact]:
         row = self._db.execute("SELECT * FROM fact WHERE id=?", (fact_id,)).fetchone()
@@ -195,6 +338,7 @@ class SqliteStore(Store):
         *,
         is_latest_only: bool = True,
         as_of: Optional[int] = None,
+        include_cold: bool = False,
     ) -> list[tuple[str, float]]:
         """Two-stage Matryoshka: coarse 256-dim KNN over a wider pool, then re-score
         the survivors at full 768-dim. The coarse pool is k*COARSE_FACTOR wide so the
@@ -203,10 +347,21 @@ class SqliteStore(Store):
         coarse_k = max(k * COARSE_FACTOR, k)
 
         latest_clause = "AND is_latest = 1" if is_latest_only else ""
+        # Tier filter (§8): drop cold facts from the default hot surface ONLY — the
+        # vec0 'tier' metadata column ANDed into the KNN WHERE. Applied EXCLUSIVELY in
+        # default latest-mode: as_of queries NEVER filter tier (historical reads see
+        # everything), and include_cold=True opts out explicitly. Every existing row is
+        # tier='hot', so this clause is byte-identical for anyone who never runs
+        # maintenance (regression pin).
+        tier_clause = (
+            "AND tier = 'hot'"
+            if (is_latest_only and as_of is None and not include_cold)
+            else ""
+        )
         # Stage 1: coarse KNN. vec0 KNN must use a single MATCH + LIMIT.
         coarse_rows = self._db.execute(
             f"""SELECT fact_id, distance FROM fact_vec
-                WHERE embedding_256 MATCH ? {latest_clause}
+                WHERE embedding_256 MATCH ? {latest_clause} {tier_clause}
                 ORDER BY distance LIMIT ?""",
             (_serialize(query_256), coarse_k),
         ).fetchall()
@@ -255,10 +410,15 @@ class SqliteStore(Store):
 
     def sparse_search(
         self, query_text: str, k: int, *, is_latest_only: bool = True,
-        as_of: Optional[int] = None,
+        as_of: Optional[int] = None, include_cold: bool = False,
     ) -> list[tuple[str, float]]:
         # FTS5 BM25: lower bm25() is better, so we negate to "higher is better".
-        needs_row_check = is_latest_only or as_of is not None
+        # Tier filter (§8): drop cold facts in default latest-mode ONLY — same
+        # condition as the dense arm, applied in the existing per-row recheck so both
+        # arms read the single flag set_tier writes. as_of NEVER filters tier;
+        # include_cold=True opts out. Byte-identical when nothing is cold.
+        filter_tier = is_latest_only and as_of is None and not include_cold
+        needs_row_check = is_latest_only or as_of is not None or filter_tier
         try:
             rows = self._db.execute(
                 """SELECT f.fact_id AS fact_id, bm25(fact_fts) AS score
@@ -280,12 +440,14 @@ class SqliteStore(Store):
         for r in rows:
             if needs_row_check:
                 row = self._db.execute(
-                    "SELECT is_latest, valid_at, valid_to FROM fact WHERE id=?",
+                    "SELECT is_latest, valid_at, valid_to, tier FROM fact WHERE id=?",
                     (r["fact_id"],),
                 ).fetchone()
                 if not row:
                     continue
                 if is_latest_only and not row["is_latest"]:
+                    continue
+                if filter_tier and row["tier"] != "hot":
                     continue
                 if as_of is not None and not (
                     row["valid_at"] <= as_of
@@ -311,7 +473,268 @@ class SqliteStore(Store):
             "UPDATE fact SET last_access=?, access_count=access_count+1 WHERE id=?",
             (when_ms, fact_id),
         )
-        self._db.commit()
+        self._commit()
+
+    # ── maintenance mutation surface (sleep-time job; design spec §4.0) ──
+    def retire_duplicate(self, loser_id: str, survivor_id: str) -> None:
+        """Retire an exact duplicate onto its survivor (two-surface, one txn).
+
+        Flips loser is_latest=0 + superseded_by=survivor on fact AND fact_vec;
+        valid_to is UNTOUCHED (verb (c) — the is_latest_only=False as-of surface is
+        unchanged). Maintains the chain invariant that every OPEN retired duplicate
+        (superseded_by set, valid_to NULL) points DIRECTLY at an is_latest=1 survivor:
+          (i)  resolve `survivor_id` to its live canonical (depth 1) — a retired
+               survivor arg would otherwise leave the loser pointing at a non-latest row;
+          (ii) re-point existing open losers of `loser_id` at that canonical, so a
+               transitive B→A→D retirement never resurrects B when D is later superseded
+               (rev-3 blocker, §4.0 / §10.2).
+        """
+        if loser_id == survivor_id:
+            raise ValueError("retire_duplicate: survivor must differ from loser")
+        db = self._db
+        # (i) resolve the survivor arg to its live canonical (depth 1).
+        row = db.execute(
+            "SELECT superseded_by, is_latest FROM fact WHERE id=?", (survivor_id,)
+        ).fetchone()
+        if row is not None and not row["is_latest"] and row["superseded_by"]:
+            survivor_id = row["superseded_by"]
+        if loser_id == survivor_id:  # resolution collapsed onto the loser — reject
+            raise ValueError("retire_duplicate: survivor resolves to the loser")
+
+        db.execute(
+            "UPDATE fact SET superseded_by=?, is_latest=0 WHERE id=?",
+            (survivor_id, loser_id),
+        )
+        db.execute("UPDATE fact_vec SET is_latest=0 WHERE fact_id=?", (loser_id,))
+        # (ii) re-point existing OPEN losers of the loser directly at the survivor.
+        db.execute(
+            "UPDATE fact SET superseded_by=? WHERE superseded_by=? AND valid_to IS NULL",
+            (survivor_id, loser_id),
+        )
+        self._commit()
+
+    def set_tier(self, fact_id: str, tier: str) -> None:
+        """Move a fact between the hot/cold tiers — fact.tier + fact_vec.tier, one txn."""
+        db = self._db
+        db.execute("UPDATE fact SET tier=? WHERE id=?", (tier, fact_id))
+        db.execute("UPDATE fact_vec SET tier=? WHERE fact_id=?", (tier, fact_id))
+        self._commit()
+
+    def merge_usage_stats(
+        self, fact_id: str, access_count: int, last_access: Optional[int]
+    ) -> None:
+        """DEDUP-EXACT survivor-merge write (§4.1): OVERWRITE the survivor's
+        usage stats with the cluster-merged values (access_count summed over the
+        cluster, last_access = max coalesce(last_access, valid_at)). Plain UPDATE
+        on fact — no vec/FTS surface. Commits through _commit so it participates
+        in an open batch() window."""
+        self._db.execute(
+            "UPDATE fact SET access_count=?, last_access=? WHERE id=?",
+            (access_count, last_access, fact_id),
+        )
+        self._commit()
+
+    def get_embedding(self, fact_id: str) -> Optional[np.ndarray]:
+        """Read a fact's stored full-dim vector back (no re-embed). None if absent.
+
+        Mirrors add_fact's serialization: vec0 holds float32 blobs, read via
+        np.frombuffer — an exact round-trip."""
+        row = self._db.execute(
+            "SELECT embedding FROM fact_vec WHERE fact_id=?", (fact_id,)
+        ).fetchone()
+        if row is None or row["embedding"] is None:
+            return None
+        return np.frombuffer(row["embedding"], dtype=np.float32)
+
+    def iter_latest_facts(self, after_id: Optional[str] = None) -> Iterator[Fact]:
+        """Id high-water scan over is_latest=1 rows (evict/summarize candidates).
+        Ids are time-sortable (types.new_id), so id order is ingestion order."""
+        if after_id is None:
+            rows = self._db.execute(
+                "SELECT * FROM fact WHERE is_latest=1 ORDER BY id"
+            ).fetchall()
+        else:
+            rows = self._db.execute(
+                "SELECT * FROM fact WHERE is_latest=1 AND id > ? ORDER BY id",
+                (after_id,),
+            ).fetchall()
+        for r in rows:
+            yield _row_to_fact(r)
+
+    def iter_slots_touched_since(self, cursor_id: str) -> Iterator[tuple[str, str]]:
+        """DISTINCT (subject_id, predicate) slots that GAINED a member since the cursor.
+
+        Keyed on any fact with id > cursor — so a duplicate landing on a long-quiet
+        slot resurfaces it (the verified cursor gap a bare latest-scan would miss).
+        Slot transforms then read the full slot via find_latest_in_slot."""
+        rows = self._db.execute(
+            "SELECT DISTINCT subject_id, predicate FROM fact WHERE id > ? "
+            "ORDER BY subject_id, predicate",
+            (cursor_id,),
+        ).fetchall()
+        for r in rows:
+            yield (r["subject_id"], r["predicate"])
+
+    # ── maintenance ledger + proposal CRUD (schema v2; design spec §4.0/§5) ──
+    # Pure row CRUD. No decide/apply logic lives here (that is the proposal
+    # lifecycle, a later task) — these just read and write the ledger tables.
+    def create_run(
+        self, namespace: str, trigger: str, started_at: int, config_hash: Optional[str]
+    ) -> str:
+        run_id = new_id()
+        # The INSERT is the atomic lease claim: ux_run_live (partial-unique on
+        # namespace WHERE status='running') makes a second live run for the same
+        # namespace raise sqlite3.IntegrityError, not a silent second row.
+        self._db.execute(
+            "INSERT INTO maintenance_run("
+            "id, namespace, started_at, finished_at, heartbeat_at, trigger, "
+            "cursor_id, config_hash, stats_json, status) "
+            "VALUES (?,?,?,?,?,?,?,?,?, 'running')",
+            (run_id, namespace, started_at, None, started_at, trigger,
+             None, config_hash, None),
+        )
+        self._commit()
+        return run_id
+
+    def heartbeat_run(self, run_id: str, at: int) -> None:
+        self._db.execute(
+            "UPDATE maintenance_run SET heartbeat_at=? WHERE id=?", (at, run_id)
+        )
+        self._commit()
+
+    def finish_run(
+        self,
+        run_id: str,
+        status: str,
+        finished_at: int,
+        stats_json: Optional[str],
+        cursor_id: Optional[str],
+    ) -> None:
+        # Clearing status='running' releases the ux_run_live lease.
+        self._db.execute(
+            "UPDATE maintenance_run SET status=?, finished_at=?, stats_json=?, "
+            "cursor_id=? WHERE id=?",
+            (status, finished_at, stats_json, cursor_id, run_id),
+        )
+        self._commit()
+
+    def get_live_run(self, namespace: str) -> Optional[dict]:
+        row = self._db.execute(
+            "SELECT * FROM maintenance_run WHERE namespace=? AND status='running'",
+            (namespace,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def last_finished_run(self, namespace: str) -> Optional[dict]:
+        # Most recent status='ok' run — the runner's previous-cursor + last-run-age
+        # source (§6.6). 'aborted'/'running' rows are excluded so a no-work run never
+        # advances the cursor another run reasons from. Pure read.
+        row = self._db.execute(
+            "SELECT * FROM maintenance_run WHERE namespace=? AND status='ok' "
+            "ORDER BY finished_at DESC, id DESC LIMIT 1",
+            (namespace,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def stage_proposal(
+        self,
+        run_id: str,
+        namespace: str,
+        kind: str,
+        payload_json: str,
+        created_at: int,
+        expires_at: int,
+        evidence_backend: Optional[str] = None,
+    ) -> str:
+        proposal_id = new_id()
+        self._db.execute(
+            "INSERT INTO maintenance_proposal("
+            "id, run_id, namespace, kind, payload_json, status, "
+            "created_at, expires_at, evidence_backend) "
+            "VALUES (?,?,?,?,?, 'pending', ?,?,?)",
+            (proposal_id, run_id, namespace, kind, payload_json,
+             created_at, expires_at, evidence_backend),
+        )
+        self._commit()
+        return proposal_id
+
+    def get_proposal(self, proposal_id: str) -> Optional[dict]:
+        row = self._db.execute(
+            "SELECT * FROM maintenance_proposal WHERE id=?", (proposal_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    # ── proposal decide (CAS) + apply-time stamps (design spec §5) ──
+    def cas_decide_proposal(
+        self,
+        proposal_id: str,
+        status: str,
+        decided_at: int,
+        decided_by: str,
+        edited_text: Optional[str] = None,
+    ) -> int:
+        """Compare-and-swap a pending proposal into a decided state (§5).
+
+        The EXACT §5 CAS: only flips a row still `status='pending'`, so two concurrent
+        writers race for the single UPDATE and exactly one wins. Returns the rows
+        updated — 1 == this caller won the decision, 0 == the proposal was already
+        decided (report, never re-apply). Commits through _commit so it participates
+        in an open approve-and-apply batch() window (§5)."""
+        cur = self._db.execute(
+            "UPDATE maintenance_proposal SET status=?, decided_at=?, decided_by=?, "
+            "edited_text=? WHERE id=? AND status='pending'",
+            (status, decided_at, decided_by, edited_text, proposal_id),
+        )
+        self._commit()
+        return cur.rowcount
+
+    def mark_proposal_applied(self, proposal_id: str, applied_at: int) -> None:
+        """Stamp applied_at on a proposal after its verbs committed (§5). Plain UPDATE
+        keyed on id — the apply happens inside the same batch() as the CAS, so the
+        stamp co-commits with the spine writes."""
+        self._db.execute(
+            "UPDATE maintenance_proposal SET applied_at=? WHERE id=?",
+            (applied_at, proposal_id),
+        )
+        self._commit()
+
+    def expire_proposal(self, proposal_id: str, expiry_reason: str) -> int:
+        """Expire a still-pending proposal (§5): status='expired' + expiry_reason
+        ('timeout' | 'stale_target'), CAS on status='pending' so it can never clobber
+        an already-decided row. Returns rows updated (1 == expired here, 0 == already
+        decided). Commits through _commit — the stale-target expiry co-commits with an
+        open batch() window so it is the write that survives while the spine stays
+        untouched (§5)."""
+        cur = self._db.execute(
+            "UPDATE maintenance_proposal SET status='expired', expiry_reason=? "
+            "WHERE id=? AND status='pending'",
+            (expiry_reason, proposal_id),
+        )
+        self._commit()
+        return cur.rowcount
+
+    def list_proposals(
+        self,
+        namespace: str,
+        status: Optional[str] = None,
+        kind: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        where = ["namespace=?"]
+        args: list = [namespace]
+        if status is not None:
+            where.append("status=?")
+            args.append(status)
+        if kind is not None:
+            where.append("kind=?")
+            args.append(kind)
+        clause = " AND ".join(where)
+        rows = self._db.execute(
+            f"SELECT * FROM maintenance_proposal WHERE {clause} "
+            f"ORDER BY created_at DESC, id DESC LIMIT ?",
+            (*args, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def close(self) -> None:
         self._db.close()
@@ -351,5 +774,6 @@ def _row_to_fact(row: sqlite3.Row) -> Fact:
         invalidated_by=row["invalidated_by"], confidence=row["confidence"],
         salience=row["salience"], last_access=row["last_access"],
         access_count=row["access_count"], is_inference=row["is_inference"],
-        tier=row["tier"], episode_id=row["episode_id"], created_at=row["created_at"],
+        tier=row["tier"], record_kind=row["record_kind"],
+        episode_id=row["episode_id"], created_at=row["created_at"],
     )

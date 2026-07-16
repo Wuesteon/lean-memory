@@ -45,12 +45,13 @@ def test_marketplace_points_at_local_plugin() -> None:
     assert p["description"]
 
 
-def test_all_four_commands_exist_with_frontmatter() -> None:
+def test_all_commands_exist_with_frontmatter() -> None:
     cmds = {
         "memory-ui.md": "/memory:ui",
         "memory-status.md": "/memory:status",
         "memory-server-up.md": "/memory:server-up",
         "memory-server-down.md": "/memory:server-down",
+        "review-memory.md": "/memory:review-memory",
     }
     for filename in cmds:
         path = PLUGIN / "commands" / filename
@@ -59,6 +60,18 @@ def test_all_four_commands_exist_with_frontmatter() -> None:
         # YAML frontmatter block.
         assert text.startswith("---\n"), f"{filename} must open with frontmatter"
         assert "description:" in text.split("---", 2)[1]
+
+
+def test_review_memory_command_forbids_agent_decisions() -> None:
+    """The review command must carry the §6.4 guardrail: no agent-initiated decisions
+    without an explicit user verdict, and no batch verb inferred from silence."""
+    text = (PLUGIN / "commands" / "review-memory.md").read_text().lower()
+    assert "may not decide" in text
+    assert "explicit user verdict" in text
+    assert "silence is not consent" in text
+    # It drives the two review tools by name.
+    assert "memory_review_queue" in text
+    assert "memory_review_decide" in text
 
 
 def test_server_commands_use_packaged_compose_path() -> None:
