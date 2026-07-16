@@ -427,7 +427,9 @@ through Claude Code via MCP tools + a shipped review prompt.
 EVICT auto-band + proposals; DEDUP-NEAR + SUMMARIZE proposals (extractive
 stub default, `[llm]` Ollama opt-in); tier filters + `include_cold`;
 `MaintenanceConfig`; lease/ledger/runner + CLI `lean-memory-maintain`;
-4 MCP tools on all three MCP surfaces + review prompt + plugin command file;
+4 MCP tools on all three MCP surfaces + review prompt + plugin command file
++ the 4 `EngineGateway` maintenance methods (the console MCP surfaces write
+only through the gateway — boundary corrected during implementation);
 opt-in auto-spawn.
 **Scope (out):** console UI (WP10b); physical space reclamation (v2,
 design-first); deletion of any kind (WP5's problem).
@@ -456,10 +458,10 @@ M (~3-4 days) · **Lane D + console files.**
 proposals grouped by entity with before/after evidence; verbs approve /
 keep / edit-then-approve / promote; batch approve per group.
 
-**Files:** `console/src/lean_memory_console/engine.py` (4 new
-`EngineGateway` methods), `console/.../inspect_sql.py` (proposal reads —
-the schema fingerprint lands in WP10a with the migration, spec §5),
-new review router, `ui/src/pages/Review.tsx`, `ui/src/App.tsx`,
+**Files:** `console/.../inspect_sql.py` (proposal reads —
+the schema fingerprint lands in WP10a with the migration, spec §5; the 4
+`EngineGateway` maintenance methods likewise land in WP10a, which this
+packet consumes), new review router, `ui/src/pages/Review.tsx`, `ui/src/App.tsx`,
 `ui/src/components/Layout.tsx`, `ui/src/api.ts`, console + UI tests.
 
 **Acceptance criteria:** decisions round-trip through `EngineGateway` (never

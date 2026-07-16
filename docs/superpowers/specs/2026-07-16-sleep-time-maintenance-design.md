@@ -786,13 +786,17 @@ the packet table — not gated on the six-week read.
   DEDUP-EXACT auto (decision 2026-07-16: auto from day one); EVICT auto-band
   + proposals; DEDUP-NEAR proposals; SUMMARIZE proposals (extractive stub);
   CLI + ledger/lease; `MaintenanceConfig`; MCP tools on all three surfaces +
-  prompt + plugin command; as-of grid test at the store predicate. Review
-  via MCP is fully usable without UI.
+  prompt + plugin command + the four `EngineGateway` methods (the console
+  MCP surfaces write **only** through the gateway, §1.3.8 — so the §6.3 v1
+  tools cannot ship without them; boundary corrected during implementation);
+  as-of grid test at the store predicate. Review via MCP is fully usable
+  without UI.
 - **v1.1 (WP10b, ~3-4 days — decision 2026-07-16: starts right after WP10a
   merges, not gated on the demand read):** console Review page +
-  `EngineGateway` methods + `inspect_sql` proposal reads. (The fingerprint
-  update is **v1** work, per §5 — deferring it would merge WP10a with a red
-  console suite; rev 3 fixed this doc's earlier triple-assignment.)
+  `inspect_sql` proposal reads, consuming the WP10a gateway methods. (The
+  fingerprint update is likewise **v1** work, per §5 — deferring either
+  would break WP10a's own surfaces; rev 3 fixed this doc's earlier
+  triple-assignment.)
 - **v2 (design-first):** space reclamation (drop full-dim vectors for cold
   facts, keep coarse 256-dim; LSM-style reader gating; explicit
   `--reclaim`), Ollama summarizer default-on with `[llm]`, WP5-integrated
@@ -810,7 +814,7 @@ the packet table — not gated on the six-week read.
 | `mcp_server.py` | 4 tools + opt-in auto-spawn (Popen primitives per §6.5) |
 | `console/.../observe_mcp.py`, `console/.../routes/mcp.py` | same 4 tools + prompt (the surfaces the plugin ships) |
 | `console/.../inspect_sql.py` | `EXPECTED_SCHEMA_FINGERPRINT` update — the §5 DDL trips it; same change as the migration |
-| `console/.../engine.py` (v1.1) | 4 new `EngineGateway` methods |
+| `console/.../engine.py` | 4 new `EngineGateway` methods (v1 — the console MCP surfaces write only through the gateway, §1.3.8) |
 | `plugin/` (`.mcp.json`, `commands/review-memory.md`), `server.json` | manifest reconciliation + command file |
 | `pyproject.toml` | `lean-memory-maintain` script |
 | `tests/test_maintenance_*.py` | §10 |
@@ -998,8 +1002,11 @@ reproduced exactly. Confirmed and fixed in this rev 3:
 - **Packet-boundary contradictions:** the console fingerprint update was
   triple-assigned (WP10a per §5/plan; WP10b per the old §9.2/§9.3/
   workpackets — the WP10b reading merges WP10a with a red console suite);
-  now unambiguously v1/WP10a. The `EngineGateway` methods row in §9.3 is
-  now marked (v1.1), matching §9.2/§8/plan/workpackets.
+  now unambiguously v1/WP10a. The `EngineGateway` methods were re-assigned
+  twice: rev 3 first marked them v1.1, then implementation (Task 8) surfaced
+  the decisive fact — both console MCP surfaces write **only** through
+  `EngineGateway` (§1.3.8), so the §6.3 v1 tools cannot ship without the
+  four methods. They are v1/WP10a; §9.2/§9.3/plan/workpackets now agree.
 - **Seam fix:** `supersede_fact` now returns the full closed-id set so the
   §4.3 staleness cascade provably sees duplicate-cascade-closed sources.
 - **§8.1** dropped a stray "auto-approve confidence band" lever that
