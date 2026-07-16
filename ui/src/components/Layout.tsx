@@ -5,6 +5,7 @@ import type { NamespaceCard, WhoAmI } from "../types";
 const navItems = [
   { to: "/", label: "Overview", end: true },
   { to: "/memories", label: "Memories", end: false },
+  { to: "/review", label: "Review", end: false },
   { to: "/episodes", label: "Episodes", end: false },
   { to: "/activity", label: "Activity", end: false },
 ];

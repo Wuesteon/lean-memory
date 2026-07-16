@@ -139,6 +139,12 @@ def spawn_maintenance(root: Path, namespace: str) -> subprocess.Popen:
     """Fire the maintenance CLI detached, apply+auto-only, with the EXACT §6.5
     Popen primitives — fd 1 (the JSON-RPC channel) is NEVER inherited.
 
+    ASYMMETRY (deliberate, §6.3/§6.5): the interactive `memory_maintenance_run` tool
+    with apply=True runs the auto band AND stages judgment-call proposals for review.
+    This auto-spawn path fires `--apply --auto-only` instead — the auto band ONLY, no
+    proposals — because it triggers unattended (on a stale-namespace tool call) and
+    must never accumulate a review queue nobody asked for.
+
     ``stdin=DEVNULL, stdout=DEVNULL`` (the v0.1.3 stdout-hygiene rule: the child must
     not write to the parent's fd 1), ``stderr`` to a per-root log file if one can be
     opened else DEVNULL, ``start_new_session=True`` (own session — reparented on parent

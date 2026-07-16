@@ -8,6 +8,7 @@ import Overview from "./pages/Overview";
 import Memories from "./pages/Memories";
 import Episodes from "./pages/Episodes";
 import Activity from "./pages/Activity";
+import Review from "./pages/Review";
 
 function LoginScreen() {
   const { login, error } = useAuth();
@@ -119,6 +120,7 @@ function Shell() {
           element={<Overview who={whoami} namespaces={namespaces} />}
         />
         <Route path="/memories" element={<Memories ns={ns} />} />
+        <Route path="/review" element={<Review ns={ns} />} />
         <Route path="/episodes" element={<Episodes ns={ns} />} />
         <Route
           path="/activity"

@@ -234,6 +234,9 @@ def memory_maintenance_run(namespace: str, apply: bool = False) -> dict[str, Any
     writes — no ledger row, no proposals. apply=True claims the lease, runs the
     provably-safe auto band (exact-dup retirement + auto-band eviction) AND stages the
     judgment-call proposals for human review. Symmetric with `lean-memory-maintain`.
+    NOTE the asymmetry with the LM_MAINT_AUTO auto-spawn path: that fires
+    `--apply --auto-only` (auto band only, never stages proposals), so unattended
+    runs cannot grow the review queue — only interactive apply=True stages.
 
     Returns the run summary: mode, staged/merged/demoted counts, and threshold stats.
     """

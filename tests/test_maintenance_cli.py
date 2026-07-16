@@ -219,6 +219,20 @@ def test_missing_root_errors_nonzero(tmp_path, monkeypatch, capsys):
     assert "root" in str(exc.value.code).lower()
 
 
+def test_missing_namespace_errors_without_creating_file(tmp_path, capsys):
+    """An EXPLICIT --namespace whose .db does not exist exits 2 with a message and
+    creates NO file — maintaining a never-written namespace must not conjure an empty DB."""
+    before = sorted(p.name for p in tmp_path.iterdir())
+    with pytest.raises(SystemExit) as exc:
+        cli_main(["--root", str(tmp_path), "--namespace", "ghost"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "ghost" in err
+    # No empty DB (or sidecars) left behind — the root directory is unchanged.
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+    assert not (tmp_path / "ghost.db").exists()
+
+
 def test_root_from_env(tmp_path, monkeypatch, capsys):
     _seed_namespace(tmp_path / "ns.db")
     monkeypatch.setenv("LM_DATA_ROOT", str(tmp_path))

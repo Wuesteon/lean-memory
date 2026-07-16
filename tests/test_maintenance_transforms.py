@@ -338,6 +338,32 @@ def test_summarize_proposes_old_cluster(store):
     assert prop["evidence_backend"] == "stub"
 
 
+def test_summarize_exhausted_budget_never_invokes_summarizer(store):
+    """A full budget must SHORT-CIRCUIT before the summarizer runs (§4.3): the summary
+    text would just be discarded, and once Ollama is the [llm] summarizer that is a
+    wasted generation. A qualifying cluster + budget 0 → dropped, spy called ZERO times."""
+    old = NOW - 200 * MS_PER_DAY  # older than age_floor (90d)
+    for i in range(5):
+        _add(store, f"note number {i}", predicate="notes", valid_at=old + i)
+    run_id = _run(store)
+
+    class _SpySummarizer:
+        backend_id = "spy"
+
+        def __init__(self):
+            self.calls = 0
+
+        def summarize(self, sources):
+            self.calls += 1
+            return "should never run"
+
+    spy = _SpySummarizer()
+    staged, dropped = summarize(store, MaintenanceConfig(), NOW, spy, run_id=run_id, budget=0)
+    assert staged == []
+    assert dropped == 1  # the qualifying cluster was dropped, not silently skipped
+    assert spy.calls == 0  # budget checked BEFORE the summarizer was ever invoked
+
+
 def test_summarize_skips_small_or_young_clusters(store):
     old = NOW - 200 * MS_PER_DAY
     # too small (4 < min_cluster 5)

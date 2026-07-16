@@ -156,6 +156,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     config = MaintenanceConfig()
     mem = Memory(root=root)
+    # An EXPLICIT --namespace whose .db does not exist is a user error, not a namespace
+    # to conjure: maintaining a never-written namespace would open (and thereby CREATE)
+    # an empty DB file. Guard BEFORE any store open so no file is left behind.
+    if args.namespace is not None and not mem._namespace_path(args.namespace).exists():
+        mem.close()
+        print(
+            f"error: namespace {args.namespace!r} has no database under {root} "
+            f"(expected {mem._namespace_path(args.namespace)}).",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     results: list[dict] = []
     exit_code = 0
     try:

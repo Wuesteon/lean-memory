@@ -169,6 +169,16 @@ console MCP surfaces. Set `LM_MAINT_AUTO=1` to opt into a background auto-run
 (safe band only) on the first tool call of a stale namespace; it is off by
 default.
 
+**Or click through it in the console.** The memory console ships a **Review**
+page: the same queue grouped by entity, before/after evidence per proposal
+(both texts + cosine for near-duplicates, sources + proposed text for
+summaries, score evidence for evictions), with Approve / Keep /
+Edit-then-approve / Promote verbs, batch-approve per entity, and a
+run-maintenance button (dry-run by default; apply sits behind a confirm). Both
+frontends drive the same proposal store with compare-and-set decisions, so
+deciding in one place shows up as "already decided" in the other instead of
+double-applying.
+
 **The safety story in one paragraph.** Nothing is ever deleted — maintenance
 only appends, retires (the same `superseded_by` flip ordinary supersession
 uses), or demotes to a cold tier, so your full history stays queryable as-of any
