@@ -40,7 +40,9 @@ on the same files).
 | WP7 Async API | `wp7-async` | A | WP4–WP6 | six-week read | open |
 | WP8 Integrations & distribution wave | `wp8-*` (per sub-packet) | C | WP0 | six-week read (spec §5) | open |
 | WP9 NLI middle tier (contingent) | `wp9-nli-resolver` | A | WP0 | **contingent** — see trigger | open |
-| Memory UI | `worktree-memory-ui` | D | WP0 (rebase gate) | spec §3 rebase gate | **approved, parked** (2026-07-10: spec v2 + 17-task plan committed on the branch; BLOCKED until WP0 Task 11 merges to main, then rebase + subagent-driven execution) |
+| WP10a Sleep-time maintenance (engine + MCP review) | `wp10a-sleep-maintenance` | A | WP1 | — (conscious post-launch addition, recorded 2026-07-16) | **claimed** (2026-07-16: implementation started on `wp10a-sleep-maintenance` by user direction; **merge remains gated on WP1 launch**) |
+| WP10b Maintenance review UI | `wp10b-review-ui` | D | WP10a | — | open |
+| Memory UI | `worktree-memory-ui` | D | — | — | **MERGED** (2026-07-14: PR #2 → main 9d840b6; console 125 + core 141 green on merged main; lane D released) |
 
 Lanes: **A** = engine/API surface (`src/lean_memory/` hot zone — strictly
 sequential within the lane). **B** = benchmarks (`bench/` — parallel-safe with
@@ -66,6 +68,7 @@ A and C). **C** = launch/distribution (docs, packaging, listings). **D** = UI.
 WP0 launch-gate ──► WP1 launch ──► (six-week read, spec §4) ─┬─► WP3 benchmarks
                                                              ├─► WP4 ─► WP5(impl) ─► WP6 ─► WP7   (lane A, sequential)
                                                              └─► WP8 integrations
+WP1 launch ──► WP10a sleep-maintenance (lane A — serialize with WP4+) ─► WP10b review UI (lane D)
 WP2 update-integrity ────────────── independent, anytime (lane B)
 WP5 design doc ──────────────────── independent, anytime (docs only)
 WP9 NLI tier ────────────────────── contingent on WP0 Task-6 / WP3 telemetry
@@ -391,15 +394,95 @@ latency per `add` < 150ms on CPU with the real model; zero new mandatory deps.
 
 ---
 
+## WP10a — Sleep-time maintenance: engine + MCP review
+
+**Branch:** `wp10a-sleep-maintenance` · **Blocked by:** WP1 (strictly
+post-launch; a conscious strategy addition recorded 2026-07-16, not gated on
+the six-week read) · **Effort:** L (~1.5 weeks) · **Lane A — claims
+`memory.py` + `store/*` + `types.py` + `retrieve/retriever.py` +
+`mcp_server.py`; serialize with WP4–WP7 within the lane. Also touches, for
+the MCP/packaging surfaces only: `console/.../observe_mcp.py`,
+`console/.../routes/mcp.py`, `console/.../inspect_sql.py` (fingerprint
+constant only — the schema-v2 DDL trips it, spec §5), `plugin/`,
+`server.json`. No UI files; WP10b is hard-serialized behind this packet, so
+the console-file overlap cannot race.**
+
+**Design (approved, verified):**
+`docs/superpowers/specs/2026-07-16-sleep-time-maintenance-design.md` (rev 3)
+— read it in full before starting; it carries a two-round verification
+record (46 findings vs rev 1; an independent second round vs rev 2 whose one
+blocker — transitive duplicate-chain resurrection — is fixed in rev 3) and
+the resolved §12 decisions.
+**Plan:** `docs/superpowers/plans/2026-07-16-sleep-time-maintenance.md`.
+
+**Goal:** Offline "sleep-time" maintenance between sessions — dedupe,
+summarize-old, evict-low-value — preserving the ADD-only spine and as-of
+semantics (spec §3.1 theorem incl. ingest commutation), with a staged human
+review queue served two ways: console UI (WP10b) and conversational review
+through Claude Code via MCP tools + a shipped review prompt.
+
+**Scope (in):** store verbs + `batch()` + engine busy_timeout; schema v2
+(user_version-gated migration + v1 fixture); the two ingest hooks
+(duplicate-cascade, summary-staleness cascade); DEDUP-EXACT auto;
+EVICT auto-band + proposals; DEDUP-NEAR + SUMMARIZE proposals (extractive
+stub default, `[llm]` Ollama opt-in); tier filters + `include_cold`;
+`MaintenanceConfig`; lease/ledger/runner + CLI `lean-memory-maintain`;
+4 MCP tools on all three MCP surfaces + review prompt + plugin command file;
+opt-in auto-spawn.
+**Scope (out):** console UI (WP10b); physical space reclamation (v2,
+design-first); deletion of any kind (WP5's problem).
+
+**Interactions:** shares the schema-migration anchor obligation with WP6
+(whoever ships first restructures `_init_schema` into versioned branches and
+checks in the v1 fixture DB — coordinate); WP4's `history()` must distinguish
+retirement-by-duplication edges from world-time supersession (spec §4.1).
+
+**Acceptance criteria:** spec §10 test plan green (as-of grid at the store
+predicate, incl. the post-apply re-run; resurrection — incl. the transitive
+chain variant — + stale-summary regression tests; ingest hooks
+byte-identical no-ops pre-maintenance; proposal lifecycle incl. stale-target
+expiry; migration fixture; stdout hygiene incl. spawned child); offline suite
+green; existing spine/as-of pins untouched.
+
+---
+
+## WP10b — Maintenance review UI (console)
+
+**Branch:** `wp10b-review-ui` · **Blocked by:** WP10a (decided 2026-07-16:
+starts right after WP10a merges, not gated on the demand read) · **Effort:**
+M (~3-4 days) · **Lane D + console files.**
+
+**Goal:** The next-morning click-through: a `Review` page listing pending
+proposals grouped by entity with before/after evidence; verbs approve /
+keep / edit-then-approve / promote; batch approve per group.
+
+**Files:** `console/src/lean_memory_console/engine.py` (4 new
+`EngineGateway` methods), `console/.../inspect_sql.py` (proposal reads —
+the schema fingerprint lands in WP10a with the migration, spec §5),
+new review router, `ui/src/pages/Review.tsx`, `ui/src/App.tsx`,
+`ui/src/components/Layout.tsx`, `ui/src/api.ts`, console + UI tests.
+
+**Acceptance criteria:** decisions round-trip through `EngineGateway` (never
+raw SQL writes); CAS "already decided elsewhere" surfaced in the UI; console
+suite green; spec §8.1 fatigue levers present (entity grouping, batch
+approve, budget cap).
+
+---
+
 ## Anti-goals (decided, with evidence — do not open packets for these)
 
 - **Graph memory / graph-traversal retrieval channel.** Mem0's own published
   ablation: graph variant +1.6 points overall, ~3× slower search, ~2× token
   cost — then removed from their OSS entirely. Revisit only if WP3 shows
   systematic multi-hop failures.
-- **Consolidation/summarization passes, webhooks, dashboards, SOC2, hosted
+- **Hosted/managed consolidation services, webhooks, dashboards, SOC2, hosted
   anything.** Managed-service concerns; the embedded positioning sidesteps
-  them (per-spec out-of-scope).
+  them (per-spec out-of-scope). *Amended 2026-07-16: the original bullet
+  banned all "consolidation/summarization passes"; its stated rationale
+  (managed-service concerns) does not apply to a local, embedded, default-off
+  sleep-time maintenance job, which is now in scope as WP10a/WP10b (verified design:
+  `docs/superpowers/specs/2026-07-16-sleep-time-maintenance-design.md`).
+  Hosted consolidation stays out.*
 - **CRDT multi-agent sync.** sqlite-memory's differentiated lane; real demand
   signal required before entering it.
 - **int8 vectors / LanceStore.** Blocked upstream / deferred (ARCHITECTURE.md,
