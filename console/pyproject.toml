@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lean-memory-console"
-version = "0.1.0"
+version = "0.2.0"
 description = "Agent-first read-only verification console for lean-memory"
 requires-python = ">=3.10"
 dependencies = [
@@ -23,8 +23,12 @@ lean-memory-console = "lean_memory_console.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/lean_memory_console"]
 
+# Packaging copy lives IN-TREE (console/deploy/) so the sdist->wheel path can
+# resolve it — a parent-relative ../deploy source escapes the sdist root and
+# fails any pip/uvx install from sdist (v0.2.0 readiness-board finding). The
+# operational file stays at repo-root deploy/; a test pins the two identical.
 [tool.hatch.build.targets.wheel.force-include]
-"../deploy/docker-compose.yml" = "lean_memory_console/deploy/docker-compose.yml"
+"deploy/docker-compose.yml" = "lean_memory_console/deploy/docker-compose.yml"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

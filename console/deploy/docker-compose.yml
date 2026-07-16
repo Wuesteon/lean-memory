@@ -1,0 +1,36 @@
+# deploy/docker-compose.yml — single-tenant lean-memory-console (Docker mode).
+#
+# Usage:
+#   LM_API_KEY=$(openssl rand -hex 24) docker compose -f deploy/docker-compose.yml up -d
+#
+# Single source of truth (spec §9): the console CLI packages this exact file
+# into the wheel; the plugin's /memory:server-up|down commands resolve it via
+#   docker compose -f "$(lean-memory-console --print-compose-path)" up -d
+services:
+  console:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: full            # full is the default first-run image (real models)
+    ports:
+      - "8377:8377"
+    environment:
+      # LM_API_KEY is required in Docker mode — compose refuses to start
+      # without it (the console also boot-checks it).
+      - LM_API_KEY=${LM_API_KEY:?set LM_API_KEY - e.g. openssl rand -hex 24}
+      - LM_DATA_ROOT=/data
+      - PORT=8377
+      - LM_CONSOLE_MODELS=auto
+      # Remote-host deployments (reached over the LAN, no reverse proxy) must
+      # list the hostname(s)/IP(s) the container is reached by, or the MCP mount
+      # 421s on the Host check. Comma-separated; ":*" matches any port. The
+      # bearer gate (LM_API_KEY) remains the primary access control.
+      # - LM_MCP_ALLOWED_HOSTS=myhost:*
+    volumes:
+      - lm_data:/data
+      - hf_cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+volumes:
+  lm_data:
+  hf_cache:

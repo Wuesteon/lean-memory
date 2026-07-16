@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from . import __version__
 from .maintain import live_lease_is_fresh, mcp_support
 from .maintain.cli import _report_to_dict
 from .maintain.config import MaintenanceConfig
@@ -88,6 +89,10 @@ def _build_memory(root: Path) -> Memory:
 
 
 mcp = FastMCP("lean-memory")
+# FastMCP doesn't take a version; unset, the SDK reports ITS OWN version in
+# serverInfo (a client would see "1.28.x" for lean-memory). Stamp ours on the
+# underlying low-level Server, which owns the initialize response.
+mcp._mcp_server.version = __version__
 
 # Lazy, build-once Memory. Import-time construction would block an MCP client's
 # server spawn through a ~2 GB cold-cache model download with no handshake; the

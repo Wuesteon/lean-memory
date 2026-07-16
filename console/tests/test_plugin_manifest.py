@@ -18,7 +18,7 @@ MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 def test_plugin_json_identity() -> None:
     data = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
     assert data["name"] == "lean-memory"
-    assert data["version"] == "0.1.0"
+    assert data["version"] == "0.2.0"
     assert data["description"]  # non-empty
 
 

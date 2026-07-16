@@ -13,7 +13,7 @@ Implementation status, design decisions, benchmark results, and known limitation
 | `Store` interface | ✅ | single abstraction; `SqliteStore` is the only impl |
 | `SqliteStore` (vec0 + FTS5) | ✅ | one file per namespace (per-tenant isolation) |
 | Monotemporal spine | ✅ | `valid_at`/`valid_to` + `is_latest` + ADD-only `superseded_by`; nothing is ever deleted |
-| Two-stage Matryoshka dense | ✅ | coarse 256-dim KNN → exact 768-dim re-score |
+| Two-stage Matryoshka dense | ✅ | coarse 256-dim KNN → exact full-dim re-score (1024-dim for the default Qwen3 embedder) |
 | BM25 sparse arm | ✅ | FTS5 `bm25()` |
 | RRF fusion (k=10) | ✅ | `Σ 1/(10 + rank)` |
 | Mandatory rerank | ✅ | `IdentityReranker` (offline default) / `CrossEncoderReranker` (Ettin-32M) |
@@ -59,8 +59,8 @@ Default-off, post-launch; no change to the first-run path. Design:
 | Proposal lifecycle | ✅ | CAS decide, one-transaction apply with target re-validation, stale-target + timeout expiry, explicit-only promotion |
 | Tier-filtered retrieval | ✅ | default latest-mode hides cold; `as_of` never filters tier; `include_cold=True` opts out |
 | `lean-memory-maintain` CLI + cron recipe | ✅ | dry-run default; `--apply`/`--auto-only`/`--json`; core package, no console dependency |
-| MCP tools ×4 + prompt + plugin command | ✅ | `memory_maintenance_run/_status`, `memory_review_queue/_decide` on all three MCP surfaces; `review-memory-maintenance` prompt + `/review-memory` command; opt-in auto-spawn (`LM_MAINT_AUTO=1`) |
-| Console Review UI (WP10b) | ⬜ | next-morning click-through page — separate packet, starts after this merges |
+| MCP tools ×4 + prompt + plugin command | ✅ | `memory_maintenance_run/_status`, `memory_review_queue/_decide` on all three MCP surfaces; `review-memory-maintenance` prompt on the console MCP surfaces + `/review-memory` plugin command; opt-in auto-spawn (`LM_MAINT_AUTO=1`) |
+| Console Review UI (WP10b) | ✅ | Review page: entity-grouped proposals, evidence cards, approve/keep/edit/promote, batch approve (PR #4) |
 
 ### Phase 2 — Next
 

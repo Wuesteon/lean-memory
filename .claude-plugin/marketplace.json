@@ -3,7 +3,7 @@
   "description": "Marketplace for the lean-memory Claude Code plugin: a local-first observing MCP and read-only verification console for agent memory.",
   "owner": {
     "name": "lean-memory",
-    "url": "https://github.com/Wuesteon/lean-memory-console"
+    "url": "https://github.com/Wuesteon/lean-memory"
   },
   "plugins": [
     {

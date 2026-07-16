@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-07-17
+
 ### Added
 
 - **Sleep-time maintenance** — an offline job that cleans up stored memory
@@ -41,7 +45,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     (`memory_maintenance_run`, dry-run by default; `memory_maintenance_status`,
     model-free; `memory_review_queue`; `memory_review_decide`) on the core
     `lean-memory-mcp` server plus both console MCP surfaces, a
-    `review-memory-maintenance` MCP prompt, and a `/review-memory` plugin command
+    `review-memory-maintenance` MCP prompt (console MCP surfaces), and a `/review-memory` plugin command
     that walks the queue grouped by entity and records only explicit user
     verdicts.
   - **Tier-filtered retrieval** — default latest-mode search hides cold-demoted

@@ -160,7 +160,8 @@ for you:
 **Next-morning review in Claude Code.** Judgment calls (near-duplicate merges,
 summaries, evictions) are staged as *proposals* — nothing changes in stored
 memory until you approve. Run the `/review-memory` plugin command (or invoke the
-`review-memory-maintenance` MCP prompt) and Claude walks you through the queue,
+`review-memory-maintenance` MCP prompt on the console server) and Claude walks
+you through the queue,
 grouped by entity with before/after evidence, recording only the verdicts you
 give. Four MCP tools back it — `memory_maintenance_run` (dry-run by default,
 like the CLI), `memory_maintenance_status`, `memory_review_queue`, and
@@ -213,7 +214,7 @@ Each `mem.add()` call runs a 4-pass hybrid extraction pipeline:
 
 Contradiction detection runs cheap-first (slot match → cosine → token subsumption → LLM). Conflicting facts are superseded, not deleted — the old fact stays with `is_latest=False` and a `superseded_by` pointer.
 
-Retrieval fuses two-stage Matryoshka dense search (256-dim coarse KNN → 768-dim re-score) with BM25 sparse, applies RRF fusion, reranks with a cross-encoder, and scores with salience-decay (`0.6·relevance + 0.2·recency + 0.2·importance`).
+Retrieval fuses two-stage Matryoshka dense search (256-dim coarse KNN → full-dim (1024 for the default embedder) re-score) with BM25 sparse, applies RRF fusion, reranks with a cross-encoder, and scores with salience-decay (`0.6·relevance + 0.2·recency + 0.2·importance`).
 
 ## Develop
 

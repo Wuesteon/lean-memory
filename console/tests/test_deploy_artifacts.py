@@ -103,3 +103,13 @@ def test_compose_path_resolves_and_matches_source() -> None:
     resolved = _compose_path()
     assert resolved.is_file()
     assert resolved.read_text() == COMPOSE.read_text()
+
+
+def test_console_packaging_copy_matches_operational_compose() -> None:
+    # The wheel force-include ships console/deploy/docker-compose.yml (an
+    # in-tree copy — a parent-relative ../deploy source escapes the sdist root
+    # and breaks any install-from-sdist). Repo-root deploy/ stays the
+    # operational file; this pin makes drift between the two a test failure.
+    packaging_copy = REPO_ROOT / "console" / "deploy" / "docker-compose.yml"
+    assert packaging_copy.is_file()
+    assert packaging_copy.read_text() == COMPOSE.read_text()
