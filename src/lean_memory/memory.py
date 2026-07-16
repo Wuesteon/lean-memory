@@ -162,6 +162,16 @@ class Memory:
         employers. A replacement on a functional slot therefore retires EVERY
         latest fact in the slot. Multi-valued slots (likes/uses/...) keep the
         single-target behavior: the user's other co-valid values survive.
+
+        Ingest hook 2 — SUMMARY-STALENESS CASCADE (§4.3): every supersede_fact
+        returns the FULL closed set — its explicit target PLUS any duplicate-cascade-
+        closed rows (§4.0). Any summary still is_latest=1 derived from ANY closed
+        source is stale and must leave the default surface (is_latest=0,
+        valid_to=new.valid_at, invalidated_by=new.id) — else the design ships a live
+        contradiction (empirically demonstrated, §14). Feeding the RETURNED ids
+        (not merely the loop's own targets) is load-bearing: a summary derived from
+        a retired duplicate would otherwise never flip (rev-3 seam fix). No-op until
+        fact_derivation has rows — the first-run path is unchanged.
         """
         if decision.label != SUPERSEDES or decision.target is None:
             return
@@ -169,8 +179,16 @@ class Memory:
             targets = [decision.target]
         else:
             targets = [f for f in slot_latest if f.id != fact.id]
+
+        closed_ids: list[str] = []
         for old in targets:
-            store.supersede_fact(old.id, fact.id, valid_to=fact.valid_at)
+            closed_ids += store.supersede_fact(old.id, fact.id, valid_to=fact.valid_at)
+
+        # Staleness cascade over the full closed set (explicit + cascade-closed).
+        for summary_id in store.find_summaries_derived_from(closed_ids):
+            store.invalidate_summary(
+                summary_id, valid_to=fact.valid_at, invalidated_by=fact.id
+            )
 
     def _build_fact(
         self, tf: TypedFact, *, namespace: str, episode_id: str, store: SqliteStore

@@ -225,7 +225,28 @@ class SqliteStore(Store):
         )
         self._commit()
 
-    def supersede_fact(self, old_fact_id: str, new_fact_id: str, valid_to: int) -> None:
+    def supersede_fact(
+        self, old_fact_id: str, new_fact_id: str, valid_to: int
+    ) -> list[str]:
+        """Close `old` at world-time `valid_to`, cascade-close its OPEN retired
+        duplicates at the same V, and return the full closed-id list.
+
+        Ingest hook 1 — DUPLICATE-CASCADE (§4.0): retire_duplicate leaves a
+        duplicate with superseded_by=survivor but valid_to NULL (verb (c), as-of
+        safe at dedup time). Such an open duplicate is invisible to
+        find_latest_in_slot, so ordinary ingest supersession never closes it —
+        after the survivor is superseded it would resurrect as a permanently-open
+        interval on the pure as-of surface (empirically demonstrated wrong answer,
+        §14). Closing `WHERE superseded_by=old AND valid_to IS NULL` at the same V
+        restores commutation. A SINGLE level suffices because retire_duplicate's
+        chain invariant keeps every open duplicate pointing DIRECTLY at the live
+        survivor (§4.0) — no recursion. Whole thing is ONE transaction.
+
+        RETURNS [old_id] + cascade-closed ids so the summary-staleness cascade
+        (§4.3) keys on every closed row, not just the explicit target — the
+        cascade-closed ids are collected by SELECT before the UPDATE (rev-3 seam
+        fix). No-op cascade until retire_duplicate has produced such rows.
+        """
         db = self._db
         db.execute(
             "UPDATE fact SET superseded_by=?, valid_to=?, is_latest=0 WHERE id=?",
@@ -233,6 +254,68 @@ class SqliteStore(Store):
         )
         # keep the vec0 metadata filter column in sync so superseded facts drop out
         db.execute("UPDATE fact_vec SET is_latest=0 WHERE fact_id=?", (old_fact_id,))
+        # Duplicate-cascade: collect the open retired duplicates FIRST (for the
+        # returned set), then close them at the same V — same transaction.
+        cascade_ids = [
+            r["id"]
+            for r in db.execute(
+                "SELECT id FROM fact WHERE superseded_by=? AND valid_to IS NULL",
+                (old_fact_id,),
+            ).fetchall()
+        ]
+        if cascade_ids:
+            db.execute(
+                "UPDATE fact SET valid_to=? WHERE superseded_by=? AND valid_to IS NULL",
+                (valid_to, old_fact_id),
+            )
+        self._commit()
+        return [old_fact_id, *cascade_ids]
+
+    # ── derivation lineage + staleness cascade support (schema v2; §4.3) ──
+    def add_derivation(
+        self, summary_id: str, source_id: str, run_id: str, created_at: int
+    ) -> None:
+        """Record one summary←source lineage edge (fact_derivation). The staleness
+        cascade reads these via ix_derivation_source to find summaries to invalidate
+        when a source is closed by ingest (§4.3). INSERT OR IGNORE keeps the
+        (summary_id, source_id) PK idempotent."""
+        self._db.execute(
+            "INSERT OR IGNORE INTO fact_derivation(summary_id, source_id, run_id, created_at) "
+            "VALUES (?,?,?,?)",
+            (summary_id, source_id, run_id, created_at),
+        )
+        self._commit()
+
+    def find_summaries_derived_from(self, source_ids: Sequence[str]) -> list[str]:
+        """DISTINCT still-latest summary ids derived from any of `source_ids` — the
+        staleness cascade's lookup (§4.3), served by ix_derivation_source. Restricted
+        to is_latest=1 so the caller never re-invalidates an already-retired summary."""
+        ids = list(source_ids)
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        rows = self._db.execute(
+            f"""SELECT DISTINCT d.summary_id AS summary_id
+                FROM fact_derivation d JOIN fact f ON f.id = d.summary_id
+                WHERE d.source_id IN ({placeholders}) AND f.is_latest = 1""",
+            ids,
+        ).fetchall()
+        return [r["summary_id"] for r in rows]
+
+    def invalidate_summary(
+        self, summary_id: str, valid_to: int, invalidated_by: str
+    ) -> None:
+        """Ingest hook 2 write — retire a summary stale-invalidated by live ingest
+        (§4.3): is_latest=0, valid_to, invalidated_by on fact + is_latest=0 mirror on
+        fact_vec, one txn. Scoped to is_latest=1 so a re-fire is a no-op. As-of
+        windows [t_a, valid_to) still show it — accurate: it was the believed state."""
+        db = self._db
+        db.execute(
+            "UPDATE fact SET is_latest=0, valid_to=?, invalidated_by=? "
+            "WHERE id=? AND is_latest=1",
+            (valid_to, invalidated_by, summary_id),
+        )
+        db.execute("UPDATE fact_vec SET is_latest=0 WHERE fact_id=?", (summary_id,))
         self._commit()
 
     def get_fact(self, fact_id: str) -> Optional[Fact]:

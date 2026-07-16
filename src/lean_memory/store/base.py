@@ -38,9 +38,14 @@ class Store(ABC):
         """Insert a fact row + its vec0 vectors + its FTS row, in one transaction."""
 
     @abstractmethod
-    def supersede_fact(self, old_fact_id: str, new_fact_id: str, valid_to: int) -> None:
+    def supersede_fact(
+        self, old_fact_id: str, new_fact_id: str, valid_to: int
+    ) -> list[str]:
         """ADD-only supersession: point old→new, set old.valid_to, flip old.is_latest=0.
-        Never deletes."""
+        Never deletes. Additionally cascade-closes old's OPEN retired duplicates
+        (superseded_by=old, valid_to NULL) at the same valid_to — ingest hook 1,
+        §4.0. RETURNS [old_id] + cascade-closed ids so the summary-staleness cascade
+        (§4.3) keys on every closed row."""
 
     @abstractmethod
     def get_fact(self, fact_id: str) -> Optional[Fact]: ...
@@ -115,6 +120,28 @@ class Store(ABC):
         """DISTINCT (subject_id, predicate) slots that GAINED a member (a fact with
         id > cursor) since the cursor — including duplicates landing on long-quiet
         slots (the verified cursor gap)."""
+
+    # ── derivation lineage + staleness cascade (schema v2, design spec §4.3) ──
+    @abstractmethod
+    def add_derivation(
+        self, summary_id: str, source_id: str, run_id: str, created_at: int
+    ) -> None:
+        """Record one summary←source lineage edge (fact_derivation). Idempotent on
+        the (summary_id, source_id) PK. The staleness cascade reads these via
+        ix_derivation_source (§4.3)."""
+
+    @abstractmethod
+    def find_summaries_derived_from(self, source_ids: Sequence[str]) -> list[str]:
+        """DISTINCT still-latest (is_latest=1) summary ids derived from any of
+        `source_ids` — the staleness cascade's lookup (ingest hook 2, §4.3)."""
+
+    @abstractmethod
+    def invalidate_summary(
+        self, summary_id: str, valid_to: int, invalidated_by: str
+    ) -> None:
+        """Retire a summary stale-invalidated by live ingest: is_latest=0, valid_to,
+        invalidated_by on fact + is_latest=0 mirror on fact_vec (ingest hook 2,
+        §4.3). Scoped to is_latest=1 so a re-fire is a no-op."""
 
     # ── maintenance ledger + proposal CRUD (schema v2, design spec §4.0/§5) ──
     # Pure row CRUD — no decide/apply logic (that is the proposal lifecycle, a
