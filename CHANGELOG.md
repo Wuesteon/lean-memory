@@ -204,4 +204,9 @@ rerank, and ADD-only supersession queryable at any past point in time
 - Sparse BM25 retrieval arm now honors the `as_of` interval predicate.
 - Known-entities handed to the router/typer are capped at the 100 most recent.
 
+[0.2.1]: https://github.com/Wuesteon/lean-memory/releases/tag/v0.2.1
+[0.2.0]: https://github.com/Wuesteon/lean-memory/releases/tag/v0.2.0
+[0.1.3]: https://github.com/Wuesteon/lean-memory/releases/tag/v0.1.3
+[0.1.2]: https://github.com/Wuesteon/lean-memory/releases/tag/v0.1.2
+[0.1.1]: https://github.com/Wuesteon/lean-memory/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Wuesteon/lean-memory/releases/tag/v0.1.0

@@ -1,5 +1,4 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "lean-memory-console",
   "description": "Marketplace for the lean-memory Claude Code plugin: a local-first observing MCP and read-only verification console for agent memory.",
   "owner": {

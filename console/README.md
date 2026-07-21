@@ -37,7 +37,7 @@ token drops the session.
 Via the Claude Code plugin (recommended), the MCP is wired automatically:
 
 ```
-/plugin marketplace add Wuesteon/lean-memory-console
+/plugin marketplace add Wuesteon/lean-memory
 /plugin install lean-memory
 /memory:ui          # launch + open the console
 /memory:status      # resolved root, namespaces, connect snippets
