@@ -4,8 +4,9 @@
 
 Embedded, local-first agent memory. No server, no daemon, no mandatory cloud key.
 
-> **Status (2026-07):** first public release line is live — on PyPI, the MCP
-> Registry, and as a Claude Code plugin (MCP-first launch).
+> **Status (2026-07):** first public release line (0.2.1) is live on PyPI and
+> the MCP Registry (MCP-first launch); the Claude Code plugin ships in this
+> repo (marketplace listing pending).
 > Roadmap and rationale: `docs/superpowers/specs/2026-07-08-strategic-direction-design.md`.
 > Public benchmark runs (LongMemEval/LoCoMo) are deliberately deferred until
 > after launch; the harness is complete (`bench/phase2_*.py`) and the engine

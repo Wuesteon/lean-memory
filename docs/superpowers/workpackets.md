@@ -31,7 +31,7 @@ on the same files).
 | Packet | Branch | Lane | Blocked by | Gate | Status |
 |---|---|---|---|---|---|
 | WP0 Launch quality gate | `launch-gate` | C | — | — | **COMPLETE** (2026-07-12: all tasks done, merged to `main` b4acb29; v0.1.3 readiness-board fixes; see section) |
-| WP1 Launch execution | `wp1-launch` | C | WP0 | spec §3 | **claimed** (2026-07-21: worktree `wp1-launch`; registry listing + v0.2.0 tag/CHANGELOG already live) |
+| WP1 Launch execution | `wp1-launch` | C | WP0 | spec §3 | **MERGED, channels partly live** (2026-07-21: PR #5 → main 0044280; v0.2.1 tagged on merge; MCP Registry + PyPI core+console LIVE at 0.2.1. Pending out-of-repo: awesome-mcp PR #9890 in review; plugin-marketplace form, Show HN, subreddit posts — see `docs/launch/launch-checklist.md`) |
 | WP2 Update-integrity bench | `wp2-update-integrity` | B | — | none — start anytime | open |
 | WP3 Phase 2 runs + publication | `wp3-phase2-benchmarks` | B | WP0 | six-week read (spec §4) or "silence → retry lever" | open |
 | WP4 Read-surface API | `wp4-read-api` | A | WP0 | six-week read ("no new engine work between launch and the read") | open |
@@ -102,7 +102,11 @@ default (`c2cdfca`), MCP-first README + GIF (`4879e09`).
 
 ---
 
-## WP1 — Launch execution
+## WP1 — Launch execution (in-repo work merged; out-of-repo channels in progress)
+
+**Status (2026-07-21):** PR #5 merged to `main` (0044280), v0.2.1 tagged and
+released on the merge; registry + PyPI live at 0.2.1. Remaining channel
+actions and their states: `docs/launch/launch-checklist.md`.
 
 **Branch:** `wp1-launch` · **Blocked by:** WP0 · **Effort:** S (mostly
 out-of-repo actions + small metadata commits)

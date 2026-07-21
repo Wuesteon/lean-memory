@@ -38,10 +38,16 @@ first-run path plus packaging majors — all fixed as **v0.1.3** (tagged
 dedupe/summarize/evict with a human review queue over MCP and the console;
 default-off, first-run path pinned byte-identical; design + verification
 record in `docs/superpowers/specs/2026-07-16-sleep-time-maintenance-design.md`.
-**Remaining next steps: release v0.2.0, then launch execution (WP1)** per spec
-§3 (MCP Registry listing, `awesome-mcp-servers` PR, Claude Code plugin
-marketplace, PyPI polish, Show HN, subreddit posts — drafts in
-`docs/launch/`).
+**WP1 launch execution shipped (2026-07-21):** v0.2.0 (2026-07-17, feature
+release) and v0.2.1 (2026-07-21, metadata-only, PR #5) are tagged and
+released; **MCP Registry and PyPI (`lean-memory` + `lean-memory-console`) are
+LIVE at 0.2.1**. Remaining channel work is out-of-repo and pending:
+`awesome-mcp-servers` PR #9890 in review since 2026-07-12; Claude Code plugin
+marketplace form not yet submitted (platform.claude.com/plugins/submit);
+Show HN + r/ClaudeAI + r/LocalLLaMA not yet posted. Final copy in
+`docs/launch/launch-copy.md`; channel runbook in
+`docs/launch/launch-checklist.md`. The **six-week demand read (spec §4)
+starts once the posts go out**.
 
 Historical context (dated, do not re-derive): `docs/phase2-learnings.md`
 (assumptions vs. reality postmortem) and `docs/superpowers/phase2-HANDOFF.md`

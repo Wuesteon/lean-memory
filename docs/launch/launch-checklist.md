@@ -1,6 +1,6 @@
 # WP1 launch checklist — channel-by-channel runbook
 
-Status as of 2026-07-21 (branch `wp1-launch`). Executes spec §3
+Status as of 2026-07-21, post-merge (PR #5) and post-v0.2.1. Executes spec §3
 (`docs/superpowers/specs/2026-07-08-strategic-direction-design.md`).
 One narrative everywhere: **local-first, no server, time-travel history.**
 Zero benchmark numbers in any copy; every channel links the repo README
@@ -10,19 +10,21 @@ quickstart; ~2 GB model download stated wherever an install is shown.
 
 | # | Channel | Status | Blocking action | Who |
 |---|---|---|---|---|
-| 1 | MCP Registry | **LIVE** (0.2.0 active, `isLatest`; `server.json` install spec verified end-to-end) | v0.2.1 republish is automatic: `publish-mcp` workflow on tag push | CI |
-| 2 | PyPI (core + console) | **LIVE** (0.2.0 both) — console page blank until 0.2.1 | Merge this branch → tag `v0.2.1` → `release` workflow publishes both via Trusted Publishing | maintainer + CI |
+| 1 | MCP Registry | **LIVE** (0.2.1 active, `isLatest`; `server.json` install spec verified end-to-end) | — (0.2.1 republished 2026-07-21; the tag-time run hit the PyPI-propagation race, `workflow_dispatch` re-run succeeded) | CI |
+| 2 | PyPI (core + console) | **LIVE** (0.2.1 both) — console page now renders full description/license/keywords/URLs (was blank at 0.2.0) | — (published via Trusted Publishing on the `v0.2.1` tag, 2026-07-21) | CI |
 | 3 | `awesome-mcp-servers` PR | **SUBMITTED** — [PR #9890](https://github.com/punkpeye/awesome-mcp-servers/pull/9890) open since 2026-07-12 (🤖🤖🤖 fast-track; Glama quality score live at 83%; maintainer's badge request answered 2026-07-13) | Waiting on maintainer; optional entry-text refresh (see below) | — |
-| 4 | Claude Code plugin marketplace | manifest valid + discovery metadata added | Submit form (steps below) **after merge** so the reviewed manifest is on `main` | maintainer (account-bound form) |
+| 4 | Claude Code plugin marketplace | manifest valid + discovery metadata on `main` | Submit form (steps below) — not yet submitted | maintainer (account-bound form) |
 | 5 | Show HN | copy final (`launch-copy.md` §1) | Post from own account | maintainer |
 | 6 | r/ClaudeAI + r/LocalLLaMA | copy final (`launch-copy.md` §2–3) | Post from own account | maintainer |
 
 ## Launch-day order
 
-1. Merge `wp1-launch` → `main` (PR; review the amended copy — see “Decisions
-   applied” below).
-2. Tag and push `v0.2.1` → `release` + `publish-mcp` workflows fire (PyPI ×2 +
-   registry). Verify: console PyPI page renders; registry shows 0.2.1.
+1. **[DONE 2026-07-21]** Merged `wp1-launch` → `main` (PR #5, merge commit
+   0044280; whole-branch review: 0 Critical / 0 Important).
+2. **[DONE 2026-07-21]** Tagged `v0.2.1` → `release` published both packages
+   to PyPI (console page verified rendering); `publish-mcp` re-dispatched
+   after the PyPI-propagation race → registry shows 0.2.1 `isLatest`; GitHub
+   release created.
 3. `awesome-mcp-servers`: **already submitted** (PR #9890, in review — the
    maintainer asked for the Glama score, which is now live; last reply
    2026-07-13). Optional: push the updated §4 entry line (adds sleep-time
@@ -42,8 +44,9 @@ quickstart; ~2 GB model download stated wherever an install is shown.
 
 ## Acceptance verification (packet criterion: each listing’s install snippet ends in a working `memory_add`/`memory_search`)
 
-Fresh-venv walkthrough against the **published** PyPI 0.2.0 artifacts,
-2026-07-21 — all four advertised snippets PASS:
+Fresh-venv walkthrough against the **published** PyPI artifacts (run at
+0.2.0; 0.2.1 is metadata-only and code-identical), 2026-07-21 — all four
+advertised snippets PASS:
 
 1. `pip install lean-memory` → `from lean_memory import Memory`; add/search
    returns the fact; supersession verified (new fact wins, old row keeps
