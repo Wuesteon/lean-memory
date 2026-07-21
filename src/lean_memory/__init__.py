@@ -11,4 +11,4 @@ from .memory import Memory
 from .types import Entity, Episode, Fact, RetrievedFact
 
 __all__ = ["Memory", "Episode", "Entity", "Fact", "RetrievedFact"]
-__version__ = "0.2.0"  # keep in sync with pyproject.toml [project].version
+__version__ = "0.2.1"  # keep in sync with pyproject.toml [project].version

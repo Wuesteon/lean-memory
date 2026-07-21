@@ -8,6 +8,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Nothing yet.
 
+## [0.2.1] - 2026-07-21
+
+Metadata-only release for the public launch — no code changes.
+
+### Fixed
+
+- **`lean-memory-console` had a blank PyPI page**: its README is now wired as
+  the package long description, and license, authors, keywords, classifiers,
+  and project URLs are declared (none were before).
+- Two relative links that 404 on PyPI (README → ARCHITECTURE.md,
+  console README → core README) are now absolute GitHub URLs.
+
+### Changed
+
+- Core package: added Documentation / Changelog / Issues project URLs.
+- Claude Code plugin marketplace manifest: added the discovery metadata
+  directories rank on (category, keywords, homepage, repository, license).
+- Launch copy (`docs/launch/`) tightened after adversarial review: the
+  "no other memory product stages agent-proposed changes for approval"
+  superlative is replaced with a defensible differentiator, positioning vs
+  built-in Claude Code memory added, "no Docker" added to the
+  differentiation copy, measured calibration figures removed from post
+  bodies per the no-benchmark-numbers launch rule.
+
 ## [0.2.0] - 2026-07-17
 
 ### Added

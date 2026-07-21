@@ -4,11 +4,12 @@
 
 Embedded, local-first agent memory. No server, no daemon, no mandatory cloud key.
 
-> **Status (2026-07):** working toward the first public launch (MCP-first).
+> **Status (2026-07):** first public release line is live — on PyPI, the MCP
+> Registry, and as a Claude Code plugin (MCP-first launch).
 > Roadmap and rationale: `docs/superpowers/specs/2026-07-08-strategic-direction-design.md`.
-> Public benchmark runs (LongMemEval/LoCoMo) are deferred until after launch;
-> the harness is complete (`bench/phase2_*.py`) and the engine flaws it exposed
-> are fixed on this branch — see `docs/phase2-learnings.md`.
+> Public benchmark runs (LongMemEval/LoCoMo) are deliberately deferred until
+> after launch; the harness is complete (`bench/phase2_*.py`) and the engine
+> flaws it exposed are fixed — see `docs/phase2-learnings.md`.
 
 ```python
 from lean_memory import Memory

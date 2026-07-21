@@ -1,6 +1,6 @@
 {
   "name": "lean-memory",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local-first agent memory for Claude Code: an observing MCP that stores and searches memories, plus a read-only console to verify the supersession spine, score breakdown, and provenance episodes.",
   "author": {
     "name": "lean-memory",
