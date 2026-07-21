@@ -21,8 +21,9 @@ Show HN: Lean-memory – agent memory that's just a SQLite file
 I built lean-memory because I wanted my coding agent's memory to live on my
 machine, next to my code, instead of behind a cloud API. It's an embedded
 Python library: `pip install lean-memory`, and each namespace is one SQLite
-file (vec0 for vectors, FTS5 for text). No server, no daemon, no mandatory
-cloud key. You can open the file in any SQLite browser and read what's in it.
+file (vec0 for vectors, FTS5 for text). No Docker, no server, no daemon, no
+mandatory cloud key. You can open the file in any SQLite browser and read
+what's in it.
 
 I didn't try to build another hosted memory layer — mem0 already does the
 universal, framework-everywhere version well, and I have no interest in
@@ -44,11 +45,13 @@ deleted — the judgment calls get staged as *proposals* you approve the next
 morning, either in a web console or conversationally in Claude Code via a
 `/review-memory` command. Only exact-duplicate retirement and a strict eviction
 band auto-apply; everything else waits for you, and an unreviewed proposal
-expires rather than silently applying. As far as I can tell, no other shipping
-memory product stages agent-proposed changes for human approval — they all
-apply-then-curate — so this is the one place I'm genuinely out ahead, and I'd
-love to know if it holds up. The as-of history stays bit-identical across
-maintenance, pinned by tests.
+expires rather than silently applying. Most memory products apply changes
+first and let you curate afterwards; a few tools now gate what an agent
+*saves* behind approval, but I haven't found one that runs offline
+maintenance over an embedded local store and stages every judgment call —
+merges, summaries, evictions — as an approvable diff. If something already
+does this end-to-end, I'd genuinely like to know. The as-of history stays
+bit-identical across maintenance, pinned by tests.
 
 What's missing: I have no public benchmark scores yet, on purpose. Numbers in
 this space swing 25+ points under independent re-evaluation, so I'd rather ship
@@ -74,7 +77,7 @@ Give Claude Code / Desktop persistent local memory via MCP in about 2 minutes
 
 I made a small MCP server that gives Claude Code and Claude Desktop memory that
 persists across sessions — and it all stays on your machine, one SQLite file
-per namespace, nothing leaves the box.
+per namespace, no Docker, no server, nothing leaves the box.
 
 Install and wire it into Claude Code:
 
@@ -92,6 +95,11 @@ the relevant ones back in a later session. Because writes are ADD-only, when
 something changes the old fact is superseded rather than deleted, so it can also
 answer "what did I tell you, and when."
 
+Compared to CLAUDE.md or Claude's built-in memory: this store isn't tied to
+one client — the same SQLite file serves Claude Code, Claude Desktop, and any
+other MCP client — and it's auditable in a way a context file isn't: open it
+in any SQLite browser, or ask what it believed at any past point in time.
+
 New in v0.2.0: sleep-time maintenance with a review queue. An offline job dedupes
 and summarizes stored memory between sessions, but the judgment calls are staged
 as *proposals* — nothing changes until you approve. You review them right inside
@@ -99,9 +107,9 @@ Claude Code: a `/review-memory` command (plus four MCP tools —
 `memory_maintenance_run`, `memory_maintenance_status`, `memory_review_queue`,
 `memory_review_decide`) walks you through the queue grouped by entity, recording
 only the verdicts you give. Unreviewed proposals expire rather than auto-applying,
-and as-of history stays intact. As far as I can tell, no other memory product
-lets you approve agent-proposed changes before they land — everything else
-applies first and lets you clean up after.
+and as-of history stays intact. Most memory tools apply changes first and let
+you clean up after; here, nothing the maintenance job judges — merges,
+summaries, evictions — lands without your approval.
 
 It's local-only and Apache-2.0. Repo, plus the Claude Desktop config, here:
 https://github.com/Wuesteon/lean-memory
@@ -126,8 +134,8 @@ Everything that touches a model runs locally:
 - Embeddings: Qwen3-Embedding-0.6B (dense), fused with BM25 via RRF
 - Rerank: Ettin-32M cross-encoder
 - Extraction: a 4-pass pipeline — rules → GLiNER2 NER → a calibrated router →
-  an optional local LLM typing tier (Ollama, e.g. qwen2.5:3b) for the ~15% of
-  candidates that escalate
+  an optional local LLM typing tier (Ollama, e.g. qwen2.5:3b) for the small
+  fraction of candidates that escalate
 
 The default `[mcp,models,extract]` install downloads about 2 GB of open,
 ungated weights. Honest about the tradeoffs: the optional `[llm]` Ollama tier
@@ -143,17 +151,15 @@ your machine. Nothing is deleted — the safe band (exact-duplicate retirement,
 a strict eviction band) auto-applies; every judgment call is staged as a
 *proposal* you approve, in a web console or conversationally in Claude Code via
 `/review-memory`. Unreviewed proposals expire rather than auto-applying, and
-the as-of spine stays bit-identical across a run (pinned by tests). As far as I
-can tell, no other shipping memory product gates agent-proposed changes on human
-approval before they land — they all apply-then-curate — so if you care about
-keeping a human in the loop on what your agent remembers, that's the pitch.
+the as-of spine stays bit-identical across a run (pinned by tests). Most memory
+products apply-then-curate; this one stages every judgment call for approval
+before it lands — if you care about keeping a human in the loop on what your
+agent remembers, that's the pitch.
 
-What I do have is a calibration writeup with real measured numbers — the
-escalation rate on real conversational turns, the granularity sweep, and the
-BET-2 three-gate revalidation. I'd genuinely welcome scrutiny of that
-methodology:
-
-https://github.com/Wuesteon/lean-memory/blob/main/bench/results/calibration/README.md
+The calibration methodology — how the extraction and escalation thresholds
+were set, small-goldset caveats included — is documented in the repo
+(`bench/results/calibration/README.md`) if you want to scrutinize how the
+defaults were chosen.
 
 The offline test suite runs with no downloads and no network at all (every
 backend has a deterministic stub), CI is on Linux + macOS, Apache-2.0. Repo:
@@ -161,16 +167,27 @@ https://github.com/Wuesteon/lean-memory
 
 ---
 
-## 4. awesome-mcp-servers PR (one-liner)
+## 4. awesome-mcp-servers PR (punkpeye/awesome-mcp-servers)
 
-> [lean-memory](https://github.com/Wuesteon/lean-memory) - Embedded, local-first agent memory in a single SQLite file per namespace (vec0 + FTS5 hybrid retrieval). ADD-only history queryable as-of any past time; offline "sleep-time" maintenance stages dedupe/summarize/evict proposals a human reviews. No server, no cloud key.
+Exact entry line, formatted to the list's conventions (owner/repo link, Glama
+score badge, legend emoji: 🐍 Python, 🏠 local, 🍎🪟🐧 cross-platform).
+Insert in **Knowledge & Memory**, alphabetically after `wnbhr/being`:
+
+> - [Wuesteon/lean-memory](https://github.com/Wuesteon/lean-memory) [![Wuesteon/lean-memory MCP server](https://glama.ai/mcp/servers/Wuesteon/lean-memory/badges/score.svg)](https://glama.ai/mcp/servers/Wuesteon/lean-memory) 🐍 🏠 🍎 🪟 🐧 - Embedded, local-first agent memory in a single SQLite file per namespace (vec0 + FTS5 hybrid retrieval). ADD-only history queryable as-of any past time; offline sleep-time maintenance stages dedupe/summarize/evict proposals a human reviews. No Docker, no server, no cloud key. `pip install 'lean-memory[mcp]'`
+
+Status: [PR #9890](https://github.com/punkpeye/awesome-mcp-servers/pull/9890)
+is already open (2026-07-12, 🤖🤖🤖 fast-track) with an earlier entry wording,
+in review — Glama quality score is live (83%), waiting on the maintainer. The
+line above is the refreshed wording; push it to the fork branch
+`add-lean-memory` only if refreshing the in-review PR is worth the churn.
 
 ---
 
 ## 5. MCP registry description (server.json / listing blurb)
 
 Local-first agent memory that's just a SQLite file. Each namespace is one
-file on your machine — no server, no daemon, no cloud key; runs fully offline
+file on your machine — no Docker, no server, no daemon, no cloud key; runs
+fully offline
 out of the box (real local models are an opt-in extra). Writes are ADD-only:
 updated facts are superseded, never overwritten, so you can query what your
 agent believed at any past point in time. An offline sleep-time maintenance

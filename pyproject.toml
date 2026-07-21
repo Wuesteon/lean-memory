@@ -1,6 +1,6 @@
 [project]
 name = "lean-memory"
-version = "0.2.0"
+version = "0.2.1"
 description = "Embedded, local-first agent memory with hybrid retrieval and ADD-only supersession."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -81,6 +81,9 @@ lean-memory-maintain = "lean_memory.maintain.cli:main"
 [project.urls]
 Homepage = "https://github.com/Wuesteon/lean-memory"
 Repository = "https://github.com/Wuesteon/lean-memory"
+Documentation = "https://github.com/Wuesteon/lean-memory/blob/main/ARCHITECTURE.md"
+Changelog = "https://github.com/Wuesteon/lean-memory/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Wuesteon/lean-memory/issues"
 
 [build-system]
 requires = ["hatchling"]

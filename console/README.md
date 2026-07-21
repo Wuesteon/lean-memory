@@ -1,6 +1,6 @@
 # lean-memory-console
 
-A read-only verification console for [lean-memory](../README.md).
+A read-only verification console for [lean-memory](https://github.com/Wuesteon/lean-memory#readme).
 
 **Agents write and search; the human verifies.** Your agent (Claude Code via
 the observing MCP, or any HTTP client in Docker mode) is the only writer of
@@ -37,7 +37,7 @@ token drops the session.
 Via the Claude Code plugin (recommended), the MCP is wired automatically:
 
 ```
-/plugin marketplace add Wuesteon/lean-memory-console
+/plugin marketplace add Wuesteon/lean-memory
 /plugin install lean-memory
 /memory:ui          # launch + open the console
 /memory:status      # resolved root, namespaces, connect snippets

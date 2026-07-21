@@ -4,11 +4,12 @@
 
 Embedded, local-first agent memory. No server, no daemon, no mandatory cloud key.
 
-> **Status (2026-07):** working toward the first public launch (MCP-first).
+> **Status (2026-07):** first public release line is live — on PyPI, the MCP
+> Registry, and as a Claude Code plugin (MCP-first launch).
 > Roadmap and rationale: `docs/superpowers/specs/2026-07-08-strategic-direction-design.md`.
-> Public benchmark runs (LongMemEval/LoCoMo) are deferred until after launch;
-> the harness is complete (`bench/phase2_*.py`) and the engine flaws it exposed
-> are fixed on this branch — see `docs/phase2-learnings.md`.
+> Public benchmark runs (LongMemEval/LoCoMo) are deliberately deferred until
+> after launch; the harness is complete (`bench/phase2_*.py`) and the engine
+> flaws it exposed are fixed — see `docs/phase2-learnings.md`.
 
 ```python
 from lean_memory import Memory
@@ -201,7 +202,7 @@ pip install 'lean-memory[models]'
 
 With `Qwen3-Embedding-0.6B` + `Ettin-32M` reranker, retrieval jumps from 1/5 to 4/5 on the internal benchmark with zero code changes.
 
-> For benchmark results, architecture decisions, and implementation status see [ARCHITECTURE.md](ARCHITECTURE.md).
+> For benchmark results, architecture decisions, and implementation status see [ARCHITECTURE.md](https://github.com/Wuesteon/lean-memory/blob/main/ARCHITECTURE.md).
 
 ## How It Works
 

@@ -9,7 +9,19 @@
     {
       "name": "lean-memory",
       "source": "./plugin",
-      "description": "Observing MCP + read-only console for lean-memory: store and search agent memories from Claude Code, then verify the supersession spine, per-hit score breakdown, and provenance episodes in a local UI."
+      "description": "Observing MCP + read-only console for lean-memory: store and search agent memories from Claude Code, then verify the supersession spine, per-hit score breakdown, and provenance episodes in a local UI.",
+      "category": "productivity",
+      "keywords": [
+        "memory",
+        "agent-memory",
+        "mcp",
+        "local-first",
+        "sqlite",
+        "retrieval"
+      ],
+      "homepage": "https://github.com/Wuesteon/lean-memory",
+      "repository": "https://github.com/Wuesteon/lean-memory",
+      "license": "Apache-2.0"
     }
   ]
 }
