@@ -30,8 +30,8 @@ on the same files).
 
 | Packet | Branch | Lane | Blocked by | Gate | Status |
 |---|---|---|---|---|---|
-| WP0 Launch quality gate | `launch-gate` | C | — | — | **in flight** (LG tasks 2,3,4,7,8,9 done; 1,5,6,10,11 open) |
-| WP1 Launch execution | `wp1-launch` | C | WP0 | spec §3 | open |
+| WP0 Launch quality gate | `launch-gate` | C | — | — | **COMPLETE** (2026-07-12: all tasks done, merged to `main` b4acb29; v0.1.3 readiness-board fixes; see section) |
+| WP1 Launch execution | `wp1-launch` | C | WP0 | spec §3 | **claimed** (2026-07-21: worktree `wp1-launch`; registry listing + v0.2.0 tag/CHANGELOG already live) |
 | WP2 Update-integrity bench | `wp2-update-integrity` | B | — | none — start anytime | open |
 | WP3 Phase 2 runs + publication | `wp3-phase2-benchmarks` | B | WP0 | six-week read (spec §4) or "silence → retry lever" | open |
 | WP4 Read-surface API | `wp4-read-api` | A | WP0 | six-week read ("no new engine work between launch and the read") | open |
@@ -81,7 +81,7 @@ packet early is a conscious strategy change — record it here if taken.
 
 ---
 
-## WP0 — Launch quality gate (in flight)
+## WP0 — Launch quality gate (complete)
 
 **Branch:** `launch-gate` (this is the existing plan, not a new worktree).
 **Plan:** `docs/superpowers/plans/2026-07-08-launch-quality-gate.md`.
