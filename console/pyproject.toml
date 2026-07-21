@@ -6,7 +6,31 @@ build-backend = "hatchling.build"
 name = "lean-memory-console"
 version = "0.2.0"
 description = "Agent-first read-only verification console for lean-memory"
+readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "lean-memory" }]
+keywords = [
+    "agent-memory",
+    "memory",
+    "mcp",
+    "lean-memory",
+    "console",
+    "verification",
+    "local-first",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "lean-memory",
     "fastapi>=0.115",
@@ -16,6 +40,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "anyio>=4", "httpx>=0.27", "pyyaml"]
+
+[project.urls]
+Homepage = "https://github.com/Wuesteon/lean-memory"
+Repository = "https://github.com/Wuesteon/lean-memory"
+Changelog = "https://github.com/Wuesteon/lean-memory/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Wuesteon/lean-memory/issues"
 
 [project.scripts]
 lean-memory-console = "lean_memory_console.cli:main"

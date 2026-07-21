@@ -201,7 +201,7 @@ pip install 'lean-memory[models]'
 
 With `Qwen3-Embedding-0.6B` + `Ettin-32M` reranker, retrieval jumps from 1/5 to 4/5 on the internal benchmark with zero code changes.
 
-> For benchmark results, architecture decisions, and implementation status see [ARCHITECTURE.md](ARCHITECTURE.md).
+> For benchmark results, architecture decisions, and implementation status see [ARCHITECTURE.md](https://github.com/Wuesteon/lean-memory/blob/main/ARCHITECTURE.md).
 
 ## How It Works
 

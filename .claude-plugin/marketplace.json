@@ -1,4 +1,5 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "lean-memory-console",
   "description": "Marketplace for the lean-memory Claude Code plugin: a local-first observing MCP and read-only verification console for agent memory.",
   "owner": {
@@ -9,7 +10,19 @@
     {
       "name": "lean-memory",
       "source": "./plugin",
-      "description": "Observing MCP + read-only console for lean-memory: store and search agent memories from Claude Code, then verify the supersession spine, per-hit score breakdown, and provenance episodes in a local UI."
+      "description": "Observing MCP + read-only console for lean-memory: store and search agent memories from Claude Code, then verify the supersession spine, per-hit score breakdown, and provenance episodes in a local UI.",
+      "category": "productivity",
+      "keywords": [
+        "memory",
+        "agent-memory",
+        "mcp",
+        "local-first",
+        "sqlite",
+        "retrieval"
+      ],
+      "homepage": "https://github.com/Wuesteon/lean-memory",
+      "repository": "https://github.com/Wuesteon/lean-memory",
+      "license": "Apache-2.0"
     }
   ]
 }

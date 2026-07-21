@@ -81,6 +81,9 @@ lean-memory-maintain = "lean_memory.maintain.cli:main"
 [project.urls]
 Homepage = "https://github.com/Wuesteon/lean-memory"
 Repository = "https://github.com/Wuesteon/lean-memory"
+Documentation = "https://github.com/Wuesteon/lean-memory/blob/main/ARCHITECTURE.md"
+Changelog = "https://github.com/Wuesteon/lean-memory/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Wuesteon/lean-memory/issues"
 
 [build-system]
 requires = ["hatchling"]
