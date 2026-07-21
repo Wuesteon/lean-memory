@@ -175,9 +175,11 @@ Insert in **Knowledge & Memory**, alphabetically after `wnbhr/being`:
 
 > - [Wuesteon/lean-memory](https://github.com/Wuesteon/lean-memory) [![Wuesteon/lean-memory MCP server](https://glama.ai/mcp/servers/Wuesteon/lean-memory/badges/score.svg)](https://glama.ai/mcp/servers/Wuesteon/lean-memory) 🐍 🏠 🍎 🪟 🐧 - Embedded, local-first agent memory in a single SQLite file per namespace (vec0 + FTS5 hybrid retrieval). ADD-only history queryable as-of any past time; offline sleep-time maintenance stages dedupe/summarize/evict proposals a human reviews. No Docker, no server, no cloud key. `pip install 'lean-memory[mcp]'`
 
-PR mechanics (per their CONTRIBUTING.md): fork → branch `add-lean-memory` →
-edit README.md only → PR titled "Add lean-memory server 🤖🤖🤖" (the trailing
-robots opt into their fast-track lane for agent-authored PRs).
+Status: [PR #9890](https://github.com/punkpeye/awesome-mcp-servers/pull/9890)
+is already open (2026-07-12, 🤖🤖🤖 fast-track) with an earlier entry wording,
+in review — Glama quality score is live (83%), waiting on the maintainer. The
+line above is the refreshed wording; push it to the fork branch
+`add-lean-memory` only if refreshing the in-review PR is worth the churn.
 
 ---
 

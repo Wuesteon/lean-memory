@@ -12,7 +12,7 @@ quickstart; ~2 GB model download stated wherever an install is shown.
 |---|---|---|---|---|
 | 1 | MCP Registry | **LIVE** (0.2.0 active, `isLatest`; `server.json` install spec verified end-to-end) | v0.2.1 republish is automatic: `publish-mcp` workflow on tag push | CI |
 | 2 | PyPI (core + console) | **LIVE** (0.2.0 both) — console page blank until 0.2.1 | Merge this branch → tag `v0.2.1` → `release` workflow publishes both via Trusted Publishing | maintainer + CI |
-| 3 | `awesome-mcp-servers` PR | ready | Open PR (entry + mechanics in `launch-copy.md` §4) | agent or maintainer |
+| 3 | `awesome-mcp-servers` PR | **SUBMITTED** — [PR #9890](https://github.com/punkpeye/awesome-mcp-servers/pull/9890) open since 2026-07-12 (🤖🤖🤖 fast-track; Glama quality score live at 83%; maintainer's badge request answered 2026-07-13) | Waiting on maintainer; optional entry-text refresh (see below) | — |
 | 4 | Claude Code plugin marketplace | manifest valid + discovery metadata added | Submit form (steps below) **after merge** so the reviewed manifest is on `main` | maintainer (account-bound form) |
 | 5 | Show HN | copy final (`launch-copy.md` §1) | Post from own account | maintainer |
 | 6 | r/ClaudeAI + r/LocalLLaMA | copy final (`launch-copy.md` §2–3) | Post from own account | maintainer |
@@ -23,11 +23,12 @@ quickstart; ~2 GB model download stated wherever an install is shown.
    applied” below).
 2. Tag and push `v0.2.1` → `release` + `publish-mcp` workflows fire (PyPI ×2 +
    registry). Verify: console PyPI page renders; registry shows 0.2.1.
-3. Open the `awesome-mcp-servers` PR
-   (fork → branch `add-lean-memory` → insert the §4 entry line in
-   **Knowledge & Memory**, alphabetically after `wnbhr/being` → PR titled
-   “Add lean-memory server 🤖🤖🤖” — the trailing robots opt into the list’s
-   documented fast-track lane for agent-authored PRs).
+3. `awesome-mcp-servers`: **already submitted** (PR #9890, in review — the
+   maintainer asked for the Glama score, which is now live; last reply
+   2026-07-13). Optional: push the updated §4 entry line (adds sleep-time
+   maintenance + “No Docker”, lighter `[mcp]` install hint) to the fork branch
+   `Wuesteon/awesome-mcp-servers:add-lean-memory` to refresh the open PR —
+   or leave the in-review entry untouched.
 4. Submit the plugin: `claude plugin validate .` (passes as of this branch),
    then the Console form at <https://platform.claude.com/plugins/submit>
    pointed at `github.com/Wuesteon/lean-memory`. Notes: Anthropic’s community
