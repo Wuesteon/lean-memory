@@ -6,7 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- CI: all workflow actions bumped to their Node 24 majors (checkout v7,
+  setup-python v7, upload-artifact v7, download-artifact v8, setup-uv
+  v9.0.0 with explicit `activate-environment: true`), clearing GitHub's
+  Node 20 runtime deprecation warnings. No user-facing changes.
 
 ## [0.2.1] - 2026-07-21
 
