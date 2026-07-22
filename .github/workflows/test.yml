@@ -28,18 +28,23 @@ jobs:
           - os: ubuntu-latest
             python-version: "3.12"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Provision Python via uv (python-build-standalone). Unlike
       # actions/setup-python, these builds are compiled with loadable-sqlite
       # extensions enabled, which sqlite-vec needs to load — the macOS
       # setup-python builds are not, so extension loading fails there.
       # One code path for both OSes.
+      # setup-uv stopped publishing major tags in v8 (supply-chain hardening),
+      # so this must pin a full release tag.
       - name: Set up uv + Python ${{ matrix.python-version }}
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+          # Since setup-uv v6, python-version alone no longer activates a venv;
+          # this input restores the exported VIRTUAL_ENV the steps below rely on.
+          activate-environment: true
         env:
           # Force uv's managed python-build-standalone builds and NEVER a
           # system/toolcache interpreter: runner images vary in whether their
@@ -53,7 +58,7 @@ jobs:
       - name: Assert loadable-sqlite-extensions support
         run: uv run python -c "import sqlite3; assert hasattr(sqlite3.Connection, 'enable_load_extension'), 'CPython built without --enable-loadable-sqlite-extensions'"
 
-      # setup-uv with a python-version input already provisions and activates a
+      # setup-uv with activate-environment: true provisions and activates a
       # venv (it exports VIRTUAL_ENV), so no explicit `uv venv` step is needed —
       # the install below targets that activated environment.
       - name: Install (editable, dev + mcp extras)
