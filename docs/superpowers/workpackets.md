@@ -32,7 +32,7 @@ on the same files).
 |---|---|---|---|---|---|
 | WP0 Launch quality gate | `launch-gate` | C | — | — | **COMPLETE** (2026-07-12: all tasks done, merged to `main` b4acb29; v0.1.3 readiness-board fixes; see section) |
 | WP1 Launch execution | `wp1-launch` | C | WP0 | spec §3 | **DONE — required channels live; posts declared optional** (2026-07-21: PR #5 → main 0044280; v0.2.1 tagged on merge; MCP Registry + PyPI core+console LIVE. 2026-07-29 user decision: remaining out-of-repo channels — awesome-mcp PR #9890, plugin-marketplace form, Show HN, subreddit posts — are OPTIONAL, not launch-required; demand read runs on the live channels from 2026-07-29 (v0.2.2). Runbook: `docs/launch/launch-checklist.md`) |
-| WP2 Update-integrity bench | `worktree-wp2-update-integrity` | B | — | none — start anytime | claimed 2026-07-29 |
+| WP2 Update-integrity bench | `worktree-wp2-update-integrity` | B | — | none — start anytime | **MERGED** (2026-07-29: PR #9 → main c803e54; 10 scenarios, 26/26 assertions PASS; core 301 + console 153 green; results appendix in `docs/competitive-landscape.md`; optional mem0 arm designed in the plan, not run; lane B released) |
 | WP3 Phase 2 runs + publication | `wp3-phase2-benchmarks` | B | WP0 | six-week read (spec §4) or "silence → retry lever" | open |
 | WP4 Read-surface API | `wp4-read-api` | A | WP0 | six-week read ("no new engine work between launch and the read") | open |
 | WP5 Deletion & GDPR (design → impl) | `wp5-deletion` | A | design: none; impl: WP4 | design anytime; impl six-week read | open |
