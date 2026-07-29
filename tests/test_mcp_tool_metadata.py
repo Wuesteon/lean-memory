@@ -61,10 +61,13 @@ def test_metadata_covers_the_whole_tool_surface(tools):
 def test_tool_declares_behavior_annotations(tools, name):
     ann = tools[name].annotations
     assert ann is not None, f"{name}: no ToolAnnotations declared"
+    # Wire names, valid on both SDK majors: mcp 1.x fields ARE camelCase;
+    # mcp 2.0 renamed them snake_case with camelCase serialization aliases.
+    dumped = ann.model_dump(by_alias=True)
     for hint, want in EXPECTED_HINTS[name].items():
-        assert getattr(ann, hint) is want, f"{name}: {hint} should be {want}"
+        assert dumped.get(hint) is want, f"{name}: {hint} should be {want}"
     # Everything operates on local SQLite under LM_DATA_ROOT — a closed world.
-    assert ann.openWorldHint is False, f"{name}: openWorldHint should be False"
+    assert dumped.get("openWorldHint") is False, f"{name}: openWorldHint should be False"
 
 
 @pytest.mark.parametrize("name", sorted(EXPECTED_HINTS))
