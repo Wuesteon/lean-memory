@@ -63,7 +63,13 @@ class SqliteStore(Store):
     def _connect(self) -> sqlite3.Connection:
         import sqlite_vec  # lazy: only needed when a real store is opened
 
-        db = sqlite3.connect(self.path)
+        # check_same_thread=False: mcp SDK 2.0 runs sync tool handlers in
+        # anyio worker threads (1.x ran them inline on the event loop), so the
+        # serving connection is touched from a different thread per call.
+        # Sequential cross-thread use is safe — CPython's sqlite3 ships
+        # threadsafety=3 (serialized) — and MCP stdio traffic is serial;
+        # nothing here enables CONCURRENT cross-thread access.
+        db = sqlite3.connect(self.path, check_same_thread=False)
         db.row_factory = sqlite3.Row
         db.enable_load_extension(True)
         sqlite_vec.load(db)
