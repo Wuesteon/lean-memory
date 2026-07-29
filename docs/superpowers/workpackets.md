@@ -43,6 +43,7 @@ on the same files).
 | WP10a Sleep-time maintenance (engine + MCP review) | `wp10a-sleep-maintenance` | A | WP1 | — (conscious post-launch addition, recorded 2026-07-16) | **MERGED** (2026-07-17: PR #3 → main d93b326; core 282 + console 138 green on merged main; final whole-branch review 0 Critical / 0 Important; merged ahead of WP1 by conscious user decision — safe: feature default-off, first-run path pinned byte-identical. WP10b unblocked; its carry-ins recorded in its section) |
 | WP10b Maintenance review UI | `wp10b-review-ui` | D | WP10a | — | **MERGED** (2026-07-17: PR #4 → main f082f4e; core 284 + console 152 green on merged main; all four WP10a carry-ins closed; lane D released) |
 | Memory UI | `worktree-memory-ui` | D | — | — | **MERGED** (2026-07-14: PR #2 → main 9d840b6; console 125 + core 141 green on merged main; lane D released) |
+| WP11 Write-time restatement dedupe | `worktree-wp11-restatement-dedup` | A | — | — | claimed 2026-07-29 (user-directed bugfix from lean-memory-sim longrun-18 report; see section) |
 
 Lanes: **A** = engine/API surface (`src/lean_memory/` hot zone — strictly
 sequential within the lane). **B** = benchmarks (`bench/` — parallel-safe with
@@ -481,6 +482,44 @@ nonexistent `--namespace` doesn't create an empty `<ns>.db`; declare `path`
 on the Store ABC; document the `memory_maintenance_run(apply=True)`
 (auto band + stages) vs auto-spawn `--auto-only` (auto band only) asymmetry
 in the tool docstring.
+
+---
+
+## WP11 — Write-time restatement dedupe (bugfix)
+
+**Claimed 2026-07-29** on `worktree-wp11-restatement-dedup`, user-directed in
+response to the lean-memory-sim `longrun-18` study (2026-07-29 report):
+identical restatements of a fact accumulate as duplicate latest facts. Cause:
+`ContradictionResolver.classify` deliberately excludes exact-text restatements
+from contradiction consideration (correct — a restatement supersedes nothing),
+but `Memory.add()` pass 5 then persists the fact unconditionally, so every
+verbatim restatement inserts a new latest row in the same slot. Store size and
+retrieval noise grow linearly with conversational repetition; WP10a's
+`dedup_near` can only clean it up offline, default-off, human-reviewed.
+
+**Scope:** in `Memory.add()` pass 5, skip persisting a typed fact whose
+normalized `fact_text` (casefold + collapse whitespace + strip edge
+punctuation; `_restatement_key`) matches a latest fact in the same
+`(subject, predicate)` slot. Normalization is deterministic on purpose: the
+default stub embedder's similarity bands can't be trusted to catch trivial
+formatting variants, and a variant landing in the ambiguous band stacks a
+second co-valid latest row (empirically observed). ADD-only compatible
+(nothing stored is mutated or deleted — the write is simply not made). Not
+gated on the six-week read: this is a bugfix on the existing write path, not
+new engine surface.
+
+**Non-goals:** internal-punctuation / semantic near-dupes — meaning-bearing
+("10,5" vs "105"), so they stay with contradiction resolution and WP10a's
+offline `dedup_near` band; re-assertion bookkeeping (seen-counts,
+last-asserted timestamps) — design it in WP4+ if the demand read asks for it.
+
+**Known limit (pinned by test):** a case variant of the ENTITY surface form
+("acme" vs "Acme") resolves to a different entity (`upsert_entity` matches
+`name=?` under BINARY collation) → different slot → bypasses dedupe AND
+contradiction resolution entirely. An entity-resolution collation policy is
+its own decision (real distinct-by-case counterexamples: "Polish"/"polish");
+pinned in `tests/test_restatement_dedupe.py::
+test_entity_case_variant_splits_the_slot_known_limit`.
 
 ---
 

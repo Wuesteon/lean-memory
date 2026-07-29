@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Verbatim restatements no longer stack duplicate facts** (WP11, surfaced
+  by the lean-memory-sim `longrun-18` study): `Memory.add()` now skips a
+  fact whose normalized text (casefold, collapsed whitespace, edge
+  punctuation stripped) matches a latest fact in the same
+  `(subject, predicate)` slot. Previously every restatement inserted a new
+  latest row — store size and retrieval noise grew linearly with
+  conversational repetition, and on the default stub embedder a trivial
+  formatting variant could land in the resolver's ambiguous band and leave
+  two co-valid "current" facts. Latest-only comparison on purpose:
+  re-asserting a superseded value is a real change and still supersedes.
+  Internal-punctuation differences ("10,5" vs "105") still go through
+  contradiction resolution; semantic near-dupes remain with the offline
+  `dedup_near` maintenance band.
+
 ### Changed
 
 - CI: all workflow actions bumped to their Node 24 majors (checkout v7,
