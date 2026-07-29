@@ -25,3 +25,14 @@ def test_scenario(scenario, tmp_path):
 def test_scenario_keys_are_unique():
     keys = [s.key for s in SCENARIOS]
     assert len(keys) == len(set(keys))
+
+
+def test_markdown_report_renders_and_passes(tmp_path, capsys):
+    from update_integrity import main
+
+    rc = main(["--markdown", "--root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "| Scenario |" in out
+    assert "employer_change" in out and "restatement_no_duplicate" in out
+    assert "FAIL" not in out

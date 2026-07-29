@@ -218,3 +218,51 @@ SCENARIOS: list[Scenario] = [
         expect_all_latest_contain=("Berlin",),
     ),
 ]
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import platform
+    import tempfile
+
+    from lean_memory import __version__
+
+    ap = argparse.ArgumentParser(description="WP2 update-integrity scenario suite")
+    ap.add_argument("--markdown", action="store_true", help="emit a markdown results table")
+    ap.add_argument("--root", default=None,
+                    help="directory for scenario stores (default: a temp dir per scenario)")
+    args = ap.parse_args(argv)
+
+    rows: list[tuple[str, list[AssertionResult]]] = []
+    for sc in SCENARIOS:
+        if args.root:
+            root = Path(args.root) / sc.key
+            root.mkdir(parents=True, exist_ok=True)
+            rows.append((sc.key, run_scenario(sc, root)))
+        else:
+            with tempfile.TemporaryDirectory() as td:
+                rows.append((sc.key, run_scenario(sc, Path(td))))
+
+    all_ok = all(r.ok for _, results in rows for r in results)
+    if args.markdown:
+        print(f"# Update-integrity results — lean-memory {__version__} "
+              f"(offline stub backends, Python {platform.python_version()})\n")
+        print("| Scenario | Assertion | Result | Detail |")
+        print("|---|---|---|---|")
+        for key, results in rows:
+            for r in results:
+                status = "PASS" if r.ok else "FAIL"
+                detail = "" if r.ok else r.detail.replace("|", "\\|")
+                print(f"| {key} | {r.name} | {status} | {detail} |")
+        print(f"\n**{'ALL PASS' if all_ok else 'FAILURES PRESENT'}** — "
+              f"{sum(r.ok for _, res in rows for r in res)}/"
+              f"{sum(len(res) for _, res in rows)} assertions.")
+    else:
+        for key, results in rows:
+            for r in results:
+                print(f"{key:32s} {r.name:28s} {'PASS' if r.ok else 'FAIL  ' + r.detail}")
+    return 0 if all_ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
