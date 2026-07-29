@@ -60,10 +60,9 @@ llm = [
 ]
 # MCP server bridge: exposes lean-memory as memory tools to MCP-compatible
 # agents (Claude Desktop, Claude Code). Optional — the core engine never imports mcp.
-# <2: mcp 2.0.0 (2026-07-28) removed mcp.server.fastmcp, which the server
-# imports; >=1.2 is where FastMCP landed in the SDK. Lift after a verified
-# migration to the 2.0 MCPServer API.
-mcp = ["mcp>=1.2,<2"]
+# Dual-path (WP12): lean_memory._mcp_compat supports 1.x FastMCP and the 2.x
+# MCPServer rename. >=1.2 is where FastMCP landed; <3 guards the next major.
+mcp = ["mcp>=1.2,<3"]
 # Terminal demo agent (examples/chat.py): Claude as the LLM via the anthropic SDK.
 examples = [
     "anthropic>=0.25",

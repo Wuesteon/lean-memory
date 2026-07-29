@@ -2,7 +2,7 @@
 
 The console ships the SAME memory + maintenance tools on both its stdio server
 (``observe_mcp.py`` — what the plugin runs) and its Docker HTTP mount
-(``routes/mcp.py``). Registering them once here, against a passed-in FastMCP + the
+(``routes/mcp.py``). Registering them once here, against a passed-in server + the
 gateway, keeps tool names, signatures, and return shapes IDENTICAL across the two —
 and identical to the core stdio server (``lean_memory.mcp_server``), which is the §6.3
 requirement and the v0.1.3 manifest-parity lesson.
@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from ._mcp_compat import MCPServerType
 
 from .engine import EngineGateway
 
@@ -61,7 +61,7 @@ Workflow:
 """
 
 
-def register_maintenance_tools(mcp: FastMCP, gateway: EngineGateway) -> None:
+def register_maintenance_tools(mcp: MCPServerType, gateway: EngineGateway) -> None:
     """Register the four §6.3 maintenance tools on `mcp`, routed through `gateway`.
 
     Identical names/signatures to the core stdio server: memory_maintenance_run
@@ -120,7 +120,7 @@ def register_maintenance_tools(mcp: FastMCP, gateway: EngineGateway) -> None:
         return json.loads(json.dumps(result, default=str))
 
 
-def register_review_prompt(mcp: FastMCP) -> None:
+def register_review_prompt(mcp: MCPServerType) -> None:
     """Register the `review-memory-maintenance` prompt on a stdio FastMCP (§6.4).
 
     The prompt hands the client agent the review workflow but FORBIDS it from deciding

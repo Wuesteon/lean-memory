@@ -46,7 +46,7 @@ def test_http_mount_exposes_the_same_tool_set(tmp_path):
     cfg = ConsoleConfig(data_root=tmp_path, mode="local", models="stub")
     log = EventLog(tmp_path)
     gw = EngineGateway(cfg, log)
-    http_mcp = _build_http_mcp(gw, cfg.mcp_allowed_hosts)
+    http_mcp, _build_app = _build_http_mcp(gw, cfg.mcp_allowed_hosts)
     names = set(_tool_params(http_mcp).keys())
     gw.close()
     log.close()

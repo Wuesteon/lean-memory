@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from mcp.server.fastmcp import FastMCP
+from ._mcp_compat import make_stdio_server
 
 from . import __version__
 from .maintain import live_lease_is_fresh, mcp_support
@@ -88,11 +88,9 @@ def _build_memory(root: Path) -> Memory:
     return Memory(root=root, **kwargs)
 
 
-mcp = FastMCP("lean-memory")
-# FastMCP doesn't take a version; unset, the SDK reports ITS OWN version in
-# serverInfo (a client would see "1.28.x" for lean-memory). Stamp ours on the
-# underlying low-level Server, which owns the initialize response.
-mcp._mcp_server.version = __version__
+# serverInfo must report lean-memory's version, not the SDK's; the compat
+# factory handles the per-major mechanics (2.x ctor kwarg vs 1.x low-level poke).
+mcp = make_stdio_server("lean-memory", version=__version__)
 
 # Lazy, build-once Memory. Import-time construction would block an MCP client's
 # server spawn through a ~2 GB cold-cache model download with no handshake; the

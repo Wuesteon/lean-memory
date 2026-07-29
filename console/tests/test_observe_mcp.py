@@ -18,7 +18,11 @@ def wrapper(tmp_path):
 
 
 def _unwrap(result):
-    """FastMCP call_tool returns (content, structured) or structured dict."""
+    """Server-side call_tool return differs per mcp major (WP12): 1.x FastMCP
+    returns (content, structured) or a structured dict; 2.0 MCPServer returns
+    a CallToolResult carrying `.structured_content`."""
+    if hasattr(result, "structured_content"):  # mcp >= 2
+        return result.structured_content
     if isinstance(result, tuple):
         return result[1]
     return result
