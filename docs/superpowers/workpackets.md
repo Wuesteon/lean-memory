@@ -44,6 +44,7 @@ on the same files).
 | WP10b Maintenance review UI | `wp10b-review-ui` | D | WP10a | — | **MERGED** (2026-07-17: PR #4 → main f082f4e; core 284 + console 152 green on merged main; all four WP10a carry-ins closed; lane D released) |
 | Memory UI | `worktree-memory-ui` | D | — | — | **MERGED** (2026-07-14: PR #2 → main 9d840b6; console 125 + core 141 green on merged main; lane D released) |
 | WP11 Write-time restatement dedupe | `worktree-wp11-restatement-dedup` | A | — | — | **MERGED** (2026-07-29: PR #7 → main 52d21fd; core 289 + console 153 green on merged branch; rode along: mcp>=1.2,<2 pin for the mcp 2.0.0 fastmcp removal, gated WP9 LLM-judge design doc; lane A released) |
+| WP12 MCP tool metadata (Glama audit) | `worktree-wp12-mcp-tool-metadata` | A | — | — | claimed 2026-07-29 — annotations + param descriptions + usage guidance on all 7 server tools; no behavior change beyond k/limit schema minimums; contract pinned in `tests/test_mcp_tool_metadata.py` |
 
 Lanes: **A** = engine/API surface (`src/lean_memory/` hot zone — strictly
 sequential within the lane). **B** = benchmarks (`bench/` — parallel-safe with

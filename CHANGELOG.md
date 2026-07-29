@@ -8,6 +8,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **MCP tool metadata (WP12)** — every server tool now ships
+  `ToolAnnotations` (`readOnlyHint`/`destructiveHint`/`idempotentHint`,
+  `openWorldHint=False`), a description for every inputSchema parameter
+  (previously 0% coverage — bare type hints), and when-to-use guidance with
+  sibling cross-references and side-effect disclosure (extraction on add,
+  first-call model download, lazy proposal expiry on queue listing).
+  Tool names, parameters, and call behavior are unchanged, except that
+  `memory_search.k` and `memory_review_queue.limit` now declare a schema
+  minimum of 1 (nonsensical values are rejected at validation instead of
+  passing through).
+  Contract pinned in `tests/test_mcp_tool_metadata.py`. Motivated by the
+  Glama directory audit scoring `memory_search`/`memory_add` 3.2–3.3/5 on
+  exactly these axes.
+
 - **Update-integrity benchmark (WP2)** — `bench/update_integrity.py`: ten
   scripted supersession scenarios through the public API (current-truth
   top-1, retirement flags, `as_of` readback, restart persistence), rendered
