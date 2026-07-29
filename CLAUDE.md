@@ -41,9 +41,12 @@ record in `docs/superpowers/specs/2026-07-16-sleep-time-maintenance-design.md`.
 **WP1 launch execution shipped (2026-07-21):** v0.2.0 (2026-07-17, feature
 release) and v0.2.1 (2026-07-21, metadata-only, PR #5) are tagged and
 released; **MCP Registry and PyPI (`lean-memory` + `lean-memory-console`) are
-LIVE at 0.2.1**; **v0.2.2** (2026-07-29, patch) pins `mcp>=1.2,<2` (mcp
-2.0.0 removed `mcp.server.fastmcp`, breaking fresh installs) and ships the
-WP11 write-time restatement dedupe. **Channel-posts decision (user,
+LIVE at 0.2.1**; **v0.2.2** (2026-07-29, patch) pinned `mcp>=1.2,<2` (mcp
+2.0.0 removed `mcp.server.fastmcp`, breaking fresh installs) and shipped the
+WP11 write-time restatement dedupe; **v0.2.3** (2026-07-29, patch — the
+current release) adds dual-path mcp 1.x/2.x support (pin `>=1.2,<3`,
+WP12), fixes the 2.0 worker-thread SQLite crash, and ships the WP13 tool
+metadata (Glama re-scan) and WP2 update-integrity benchmark. **Channel-posts decision (user,
 2026-07-29): the remaining posts are OPTIONAL, not launch-required** —
 `awesome-mcp-servers` PR #9890 (in review since 2026-07-12), the Claude Code
 plugin marketplace form (platform.claude.com/plugins/submit), and the
