@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import string
 import sys
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
@@ -50,6 +51,19 @@ _DEFAULT_PREDICATE = "about"
 _KNOWN_ENTITIES_CAP = 100
 
 _SAFE_NS = re.compile(r"[^A-Za-z0-9_.-]")
+
+# Restatement-dedupe normalization (WP11). Trivial formatting variants of a
+# restatement (case, whitespace runs, edge punctuation) must dedupe
+# DETERMINISTICALLY: the default stub embedder's similarity bands can't be
+# trusted to catch them, and a variant that lands in the ambiguous band stacks
+# a second co-valid latest row on the slot. Edge punctuation only — internal
+# punctuation can carry meaning ("10,5" vs "105", "re-sign" vs "resign") and
+# stays with contradiction resolution / the offline dedup_near band.
+_EDGE_CHARS = string.punctuation + string.whitespace
+
+
+def _restatement_key(text: str) -> str:
+    return " ".join(text.split()).casefold().strip(_EDGE_CHARS)
 
 
 def _safe_json(raw: Optional[str]) -> dict:
@@ -176,6 +190,18 @@ class Memory:
 
             # Contradiction → supersession over the (subject, predicate) slot.
             slot_latest = store.find_latest_in_slot(fact.subject_id, fact.predicate)
+
+            # A restatement of a CURRENT fact carries no new information: the
+            # resolver already refuses to supersede on identical text, so
+            # persisting it would only stack duplicate latest rows in the slot
+            # (WP11 — grows linearly with conversational repetition). Latest-only
+            # on purpose: re-asserting a superseded value IS a change and must
+            # fall through to contradiction resolution. The empty-key guard
+            # keeps all-punctuation texts ("?!" vs "...") from conflating.
+            key = _restatement_key(fact.fact_text)
+            if key and any(_restatement_key(f.fact_text) == key for f in slot_latest):
+                continue
+
             decision = self.contradiction.classify(
                 fact, slot_latest, self.embedder,
                 # ambiguous cases can escalate to the same typer; offline stub is fine.
