@@ -209,4 +209,56 @@ fully neutral, reproducible cross-system benchmark for this category.
 
 ---
 
-Last updated: 2026-07-02
+Last updated: 2026-07-29
+
+## Appendix: update-integrity results (WP2)
+
+*When a fact changes, does the engine return the current truth and keep the
+old one queryable?* Ten scripted scenarios through the public API only
+(`Memory.add` → `Memory.search`), asserting per scenario: top-1 is the new
+fact; the superseded fact has `is_latest=False` and `superseded_by` set; and
+`as_of=<t before the update>` returns the old fact (point-in-time reads pass
+`is_latest_only=False` — the as_of interval predicate governs visibility).
+Offline deterministic backends by default; the identical scenarios run as
+regression tests in CI (`tests/test_update_integrity_scenarios.py`).
+
+Reproduce:
+
+```bash
+.venv/bin/python bench/update_integrity.py --markdown
+```
+
+Results (2026-07-29):
+
+# Update-integrity results — lean-memory 0.2.2 (offline stub backends, Python 3.13.7)
+
+| Scenario | Assertion | Result | Detail |
+|---|---|---|---|
+| employer_change | top1-is-current | PASS |  |
+| employer_change | old-fact-retired | PASS |  |
+| employer_change | as-of-returns-old-truth | PASS |  |
+| name_identity_change | top1-is-current | PASS |  |
+| name_identity_change | old-fact-retired | PASS |  |
+| name_identity_change | as-of-returns-old-truth | PASS |  |
+| city_move | top1-is-current | PASS |  |
+| city_move | old-fact-retired | PASS |  |
+| city_move | as-of-returns-old-truth | PASS |  |
+| preference_flip | top1-is-current | PASS |  |
+| preference_flip | old-fact-retired | PASS |  |
+| preference_flip | as-of-returns-old-truth | PASS |  |
+| additive_extends | top1-is-current | PASS |  |
+| additive_extends | latest-set-exact | PASS |  |
+| replacement_after_additive | top1-is-current | PASS |  |
+| replacement_after_additive | old-fact-retired | PASS |  |
+| replacement_after_additive | latest-set-exact | PASS |  |
+| multivalued_preserved | top1-is-current | PASS |  |
+| multivalued_preserved | latest-set-exact | PASS |  |
+| as_of_before_everything | top1-is-current | PASS |  |
+| as_of_before_everything | as-of-returns-old-truth | PASS |  |
+| restart_persistence | top1-is-current | PASS |  |
+| restart_persistence | old-fact-retired | PASS |  |
+| restart_persistence | as-of-returns-old-truth | PASS |  |
+| restatement_no_duplicate | top1-is-current | PASS |  |
+| restatement_no_duplicate | latest-set-exact | PASS |  |
+
+**ALL PASS** — 26/26 assertions.
