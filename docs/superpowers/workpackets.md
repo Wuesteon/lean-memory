@@ -45,6 +45,7 @@ on the same files).
 | Memory UI | `worktree-memory-ui` | D | — | — | **MERGED** (2026-07-14: PR #2 → main 9d840b6; console 125 + core 141 green on merged main; lane D released) |
 | WP12 mcp 2.0 migration | `worktree-wp12-mcp2-migration` | A | — | none — dependency-driven | **MERGED** (2026-07-29: PR #10 → main 4efe4ca; dual-path compat, pin widened to mcp>=1.2,<3; fixed the 2.0 worker-thread SQLite crash (check_same_thread=False, serialized); all four suite combos green locally, CI green on fresh-resolved 2.0; shipped in v0.2.3 (2026-07-29); lane A released) |
 | WP11 Write-time restatement dedupe | `worktree-wp11-restatement-dedup` | A | — | — | **MERGED** (2026-07-29: PR #7 → main 52d21fd; core 289 + console 153 green on merged branch; rode along: mcp>=1.2,<2 pin for the mcp 2.0.0 fastmcp removal, gated WP9 LLM-judge design doc; lane A released) |
+| WP14 Console tool metadata | `wp14-console-tool-metadata` | D | — | precondition: console listed on Glama? | open |
 | WP13 MCP tool metadata (Glama audit) | `worktree-wp12-mcp-tool-metadata` | A | — | — | **MERGED** (2026-07-29: PR #11 → main 342461e; branch name predates the renumber — claimed as WP12 concurrently with the mcp 2.0 migration; annotations + param descriptions + usage guidance on all 7 server tools, no behavior change beyond k/limit schema minimums; contract pinned in `tests/test_mcp_tool_metadata.py`, green on both mcp majors (core 319 on 1.28.0, 318+1 skip on 2.0.0 scratch venv), console 153, CI 6/6; shipped in v0.2.3 (2026-07-29) — Glama re-scan triggered; lane A released) |
 
 Lanes: **A** = engine/API surface (`src/lean_memory/` hot zone — strictly
@@ -260,6 +261,12 @@ search. This is also the API-parity tier every competitor ships (Mem0 OSS:
   decomposition (dense/sparse ranks, RRF, rerank, recency, importance, final —
   the retriever computes all of these already; this exposes, not computes).
 - MCP parity: `memory_history` + `memory_get_all` tools in `mcp_server.py`.
+- **Carry-in from WP2 (2026-07-29):** a point-in-time read today requires
+  `search(..., as_of=T, is_latest_only=False)` — the latest-only filter
+  applies even under `as_of`, so superseded facts stay invisible unless the
+  caller knows to open it (bit the WP2 scenario engine; documented in the
+  `docs/competitive-landscape.md` appendix). `history()` / a dedicated
+  point-in-time verb should own this so callers can't hold it wrong.
 - README "inspect your memory" section (the pitch is *auditable* memory — show
   it).
 **Scope (out):** any write-path change; deletion (WP5); scoping (WP6).
@@ -532,6 +539,74 @@ contradiction resolution entirely. An entity-resolution collation policy is
 its own decision (real distinct-by-case counterexamples: "Polish"/"polish");
 pinned in `tests/test_restatement_dedupe.py::
 test_entity_case_variant_splits_the_slot_known_limit`.
+
+---
+
+## WP12 — mcp SDK 2.0 migration (dual-path)
+
+**Merged 2026-07-29** (PR #10; shipped in v0.2.3). Plan:
+`docs/superpowers/plans/2026-07-29-wp12-mcp2-migration.md`. Compat layers
+`lean_memory._mcp_compat` + `lean_memory_console._mcp_compat` (duplicated on
+purpose — console↔core version skew makes cross-package private imports
+fragile) handle the 2.0 `FastMCP` → `MCPServer` rename, ctor `version=`,
+transport params moving to `streamable_http_app(...)`, and the in-memory test
+client (`tests/mcp_client_compat.py`). Also fixed the 2.0 worker-thread
+SQLite crash (`check_same_thread=False`, serialized-safe for serial MCP
+traffic). Pin: `mcp>=1.2,<3` in both packages, cap asserted by the pyproject
+guard test.
+
+**Future decision (recorded, no date):** drop the 1.x path and floor at
+`mcp>=2` once the ecosystem has moved — signal to watch: major MCP clients /
+frameworks flooring at 2.x, or the 1.x branch stopping security fixes. Until
+then both paths stay tested (dev venvs on 1.x, CI fresh-resolve on 2.x).
+
+---
+
+## WP13 — MCP tool metadata (Glama audit)
+
+**Merged 2026-07-29** (PR #11; shipped in v0.2.3 — the Glama re-scan only
+counts released artifacts, so the score signal dates from this tag). Claimed
+concurrently with WP12 under the same number and renumbered at merge; branch
+name `worktree-wp12-mcp-tool-metadata` predates the renumber. Annotations
+(`readOnlyHint`/`destructiveHint`/`idempotentHint`, `openWorldHint=False`),
+100% parameter-description coverage, and when-to-use guidance on all 7 core
+server tools; only behavior change is schema minimums on `memory_search.k` /
+`memory_review_queue.limit`. Contract pinned in
+`tests/test_mcp_tool_metadata.py`, asserted via camelCase wire names
+(`model_dump(by_alias=True)`) so it holds on both mcp majors.
+
+---
+
+## WP14 — Console tool metadata (lane D, open)
+
+**Branch:** `wp14-console-tool-metadata` · **Blocked by:** — · **Gate:**
+none, but **precondition:** check whether `lean-memory-console` is
+independently listed/scored on Glama — if it isn't, this drops in priority.
+
+**Goal:** Give the console's MCP wrapper tools (stdio `observe_mcp.py` +
+HTTP mount `routes/mcp.py`, via shared `mcp_tools.py`) the same annotation +
+parameter-description + usage-guidance treatment as WP13's core tools,
+reusing the WP13 contract-test pattern nearly verbatim
+(`console/tests/test_mcp_tool_metadata.py`, wire-name asserts, both majors).
+
+**Files:** `console/src/lean_memory_console/mcp_tools.py`, `observe_mcp.py`,
+`routes/mcp.py`, new console contract test. Lane D — no core files.
+
+---
+
+## Open follow-ups (recorded, not yet packets)
+
+- **Entity case-collation policy** — WP11's pinned known limit ("acme" vs
+  "Acme" split the slot and bypass dedupe + contradiction resolution; see the
+  WP11 section). Needs a decision, not just code: case-insensitive lookup has
+  real counterexamples ("Polish"/"polish"). Natural home: WP4+ entity
+  surface work, or its own small lane-A packet.
+- **WP2 mem0 comparison arm** — designed as Task 5 of the WP2 plan
+  (`--arm mem0`, version-pinned output, exit-2 on missing install); needs the
+  user's go-ahead plus a configured mem0 LLM path (Ollama or API key) to run.
+- **WP9 LLM-judge tier** — design recorded
+  (`docs/superpowers/specs/2026-07-29-wp9-llm-judge-design.md`), gated on the
+  six-week read or the WP9 trigger.
 
 ---
 
