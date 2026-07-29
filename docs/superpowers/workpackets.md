@@ -397,6 +397,16 @@ model.
 **Acceptance criteria:** escalation at target with gates green; added p50
 latency per `add` < 150ms on CPU with the real model; zero new mandatory deps.
 
+**Variant recorded 2026-07-29 (user-requested):** an optional API-key
+LLM-as-judge backend for the same ambiguous-band rung, via the existing
+`classify(..., llm_typer=...)` seam — design in
+`specs/2026-07-29-wp9-llm-judge-design.md`. Adjudicates EXTENDS vs SUPERSEDES
+only (never gates the WP11 restatement skip — a wrong skip loses data, a
+wrong adjudication is ADD-only-recoverable); enabled by
+`LEAN_MEMORY_JUDGE_API_KEY` presence, fails open to `ambiguous_default`.
+Implementation stays behind this packet's gate; the two implementations (local
+NLI / API judge) compose, order decided when the packet opens.
+
 ---
 
 ## WP10a — Sleep-time maintenance: engine + MCP review
