@@ -43,7 +43,7 @@ on the same files).
 | WP10a Sleep-time maintenance (engine + MCP review) | `wp10a-sleep-maintenance` | A | WP1 | — (conscious post-launch addition, recorded 2026-07-16) | **MERGED** (2026-07-17: PR #3 → main d93b326; core 282 + console 138 green on merged main; final whole-branch review 0 Critical / 0 Important; merged ahead of WP1 by conscious user decision — safe: feature default-off, first-run path pinned byte-identical. WP10b unblocked; its carry-ins recorded in its section) |
 | WP10b Maintenance review UI | `wp10b-review-ui` | D | WP10a | — | **MERGED** (2026-07-17: PR #4 → main f082f4e; core 284 + console 152 green on merged main; all four WP10a carry-ins closed; lane D released) |
 | Memory UI | `worktree-memory-ui` | D | — | — | **MERGED** (2026-07-14: PR #2 → main 9d840b6; console 125 + core 141 green on merged main; lane D released) |
-| WP11 Write-time restatement dedupe | `worktree-wp11-restatement-dedup` | A | — | — | claimed 2026-07-29 (user-directed bugfix from lean-memory-sim longrun-18 report; see section) |
+| WP11 Write-time restatement dedupe | `worktree-wp11-restatement-dedup` | A | — | — | **MERGED** (2026-07-29: PR #7 → main 52d21fd; core 289 + console 153 green on merged branch; rode along: mcp>=1.2,<2 pin for the mcp 2.0.0 fastmcp removal, gated WP9 LLM-judge design doc; lane A released) |
 
 Lanes: **A** = engine/API surface (`src/lean_memory/` hot zone — strictly
 sequential within the lane). **B** = benchmarks (`bench/` — parallel-safe with
