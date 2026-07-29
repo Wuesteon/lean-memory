@@ -8,6 +8,11 @@ quickstart; ~2 GB model download stated wherever an install is shown.
 
 ## Channel status
 
+> **Decision (user, 2026-07-29):** channels 3–6 are **OPTIONAL**, not
+> launch-required. The six-week demand read (spec §4) runs on the live
+> channels (1–2), window start 2026-07-29 (v0.2.2). If any optional post
+> goes out later, record its date here so the read can be segmented.
+
 | # | Channel | Status | Blocking action | Who |
 |---|---|---|---|---|
 | 1 | MCP Registry | **LIVE** (0.2.1 active, `isLatest`; `server.json` install spec verified end-to-end) | — (0.2.1 republished 2026-07-21; the tag-time run hit the PyPI-propagation race, `workflow_dispatch` re-run succeeded) | CI |
