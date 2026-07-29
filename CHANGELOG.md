@@ -8,6 +8,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Pinned `mcp>=1.2,<2`** (core `[mcp]` extra and console): `mcp` 2.0.0
+  (released 2026-07-28) removed `mcp.server.fastmcp`, breaking the server
+  import on any fresh install — surfaced as an all-jobs CI failure. Floor
+  raised 1.0 → 1.2, where `FastMCP` actually entered the SDK. The cap lifts
+  after a verified migration to the 2.0 `MCPServer` API.
+
 - **Verbatim restatements no longer stack duplicate facts** (WP11, surfaced
   by the lean-memory-sim `longrun-18` study): `Memory.add()` now skips a
   fact whose normalized text (casefold, collapsed whitespace, edge

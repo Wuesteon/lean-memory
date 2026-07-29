@@ -35,7 +35,8 @@ dependencies = [
     "lean-memory",
     "fastapi>=0.115",
     "uvicorn>=0.30",
-    "mcp>=1.0",
+    # <2: mcp 2.0.0 removed mcp.server.fastmcp (see core [mcp] extra note).
+    "mcp>=1.2,<2",
 ]
 
 [project.optional-dependencies]
