@@ -32,9 +32,10 @@ def test_pyproject_declares_mcp_extra_and_script():
     data = tomllib.loads(PYPROJECT.read_text())
     extras = data["project"]["optional-dependencies"]
     assert "mcp" in extras, "an 'mcp' optional extra must be declared"
-    # The <2 cap is load-bearing: mcp 2.0.0 removed mcp.server.fastmcp, which
-    # the server imports. Lift only with a verified 2.0 MCPServer migration.
-    assert any(req.startswith("mcp>=") and req.endswith(",<2") for req in extras["mcp"]), extras["mcp"]
+    # The <3 cap is load-bearing: the dual-path compat layer (WP12) knows the
+    # 1.x and 2.x APIs; an unreleased major would install untested. Widen only
+    # with a verified migration, as with 2.0.
+    assert any(req.startswith("mcp>=") and req.endswith(",<3") for req in extras["mcp"]), extras["mcp"]
     scripts = data["project"].get("scripts", {})
     assert scripts.get("lean-memory-mcp") == "lean_memory.mcp_server:main"
 
