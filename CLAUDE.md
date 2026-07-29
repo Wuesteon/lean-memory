@@ -41,13 +41,18 @@ record in `docs/superpowers/specs/2026-07-16-sleep-time-maintenance-design.md`.
 **WP1 launch execution shipped (2026-07-21):** v0.2.0 (2026-07-17, feature
 release) and v0.2.1 (2026-07-21, metadata-only, PR #5) are tagged and
 released; **MCP Registry and PyPI (`lean-memory` + `lean-memory-console`) are
-LIVE at 0.2.1**. Remaining channel work is out-of-repo and pending:
-`awesome-mcp-servers` PR #9890 in review since 2026-07-12; Claude Code plugin
-marketplace form not yet submitted (platform.claude.com/plugins/submit);
-Show HN + r/ClaudeAI + r/LocalLLaMA not yet posted. Final copy in
-`docs/launch/launch-copy.md`; channel runbook in
-`docs/launch/launch-checklist.md`. The **six-week demand read (spec §4)
-starts once the posts go out**.
+LIVE at 0.2.1**; **v0.2.2** (2026-07-29, patch) pins `mcp>=1.2,<2` (mcp
+2.0.0 removed `mcp.server.fastmcp`, breaking fresh installs) and ships the
+WP11 write-time restatement dedupe. **Channel-posts decision (user,
+2026-07-29): the remaining posts are OPTIONAL, not launch-required** —
+`awesome-mcp-servers` PR #9890 (in review since 2026-07-12), the Claude Code
+plugin marketplace form (platform.claude.com/plugins/submit), and the
+Show HN / r/ClaudeAI / r/LocalLLaMA posts may go out whenever (or never);
+final copy stays ready in `docs/launch/launch-copy.md`, runbook in
+`docs/launch/launch-checklist.md`. The **six-week demand read (spec §4) runs
+on the already-live channels (MCP Registry + PyPI), window start 2026-07-29
+(v0.2.2)**; if posts do go out later, note the date so the read can be
+segmented.
 
 Historical context (dated, do not re-derive): `docs/phase2-learnings.md`
 (assumptions vs. reality postmortem) and `docs/superpowers/phase2-HANDOFF.md`
