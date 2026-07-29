@@ -4,6 +4,17 @@ All notable changes to lean-memory are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Update-integrity benchmark (WP2)** — `bench/update_integrity.py`: ten
+  scripted supersession scenarios through the public API (current-truth
+  top-1, retirement flags, `as_of` readback, restart persistence), rendered
+  as a markdown table and pinned offline as
+  `tests/test_update_integrity_scenarios.py`. Results appendix in
+  `docs/competitive-landscape.md`.
+
 ## [0.2.2] - 2026-07-29
 
 Patch release: restores the MCP first-run path for fresh installs (broken by

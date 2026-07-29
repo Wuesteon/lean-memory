@@ -121,6 +121,7 @@ exclude = [
     # cannot collect without it; the fixtures are their LongMemEval-derived data.
     "/tests/test_phase2_*.py",
     "/tests/test_escalation_probe.py",
+    "/tests/test_update_integrity_scenarios.py",
     "/tests/fixtures/",
 ]
 
