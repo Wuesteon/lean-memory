@@ -4,7 +4,11 @@ All notable changes to lean-memory are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.3] - 2026-07-29
+
+Compatibility + polish release: mcp SDK 2.0 support (dual-path, pin widened
+from the v0.2.2 emergency `<2` cap), a 2.0-threading crash fix, MCP tool
+metadata for directory scoring, and the update-integrity benchmark.
 
 ### Changed
 
