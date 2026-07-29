@@ -45,6 +45,7 @@ on the same files).
 | Memory UI | `worktree-memory-ui` | D | — | — | **MERGED** (2026-07-14: PR #2 → main 9d840b6; console 125 + core 141 green on merged main; lane D released) |
 | WP12 mcp 2.0 migration | `worktree-wp12-mcp2-migration` | A | — | none — dependency-driven | **MERGED** (2026-07-29: PR #10 → main 4efe4ca; dual-path compat, pin widened to mcp>=1.2,<3; fixed the 2.0 worker-thread SQLite crash (check_same_thread=False, serialized); all four suite combos green locally, CI green on fresh-resolved 2.0; ship as v0.2.3 pending user go-ahead; lane A released) |
 | WP11 Write-time restatement dedupe | `worktree-wp11-restatement-dedup` | A | — | — | **MERGED** (2026-07-29: PR #7 → main 52d21fd; core 289 + console 153 green on merged branch; rode along: mcp>=1.2,<2 pin for the mcp 2.0.0 fastmcp removal, gated WP9 LLM-judge design doc; lane A released) |
+| WP13 MCP tool metadata (Glama audit) | `worktree-wp12-mcp-tool-metadata` | A | — | — | claimed 2026-07-29 (branch name predates the renumber: claimed as WP12 concurrently with the mcp 2.0 migration, renumbered on merge) — annotations + param descriptions + usage guidance on all 7 server tools; no behavior change beyond k/limit schema minimums; contract pinned in `tests/test_mcp_tool_metadata.py` |
 
 Lanes: **A** = engine/API surface (`src/lean_memory/` hot zone — strictly
 sequential within the lane). **B** = benchmarks (`bench/` — parallel-safe with

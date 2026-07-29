@@ -20,7 +20,10 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
+
+from mcp.types import ToolAnnotations
+from pydantic import Field
 
 from ._mcp_compat import make_stdio_server
 
@@ -152,17 +155,114 @@ def _namespace_path(namespace: str) -> Path:
     return _mem().root / f"{safe}.db"
 
 
-@mcp.tool()
-def memory_add(namespace: str, text: str) -> str:
-    """Ingest text into the namespace's memory. Returns how many facts were written."""
+# Directory graders and agent clients read tool quality off exactly what
+# `tools/list` ships: description + inputSchema + annotations. The contract
+# (annotations honest per tool, every parameter described, siblings
+# cross-referenced, side effects disclosed) is pinned by
+# tests/test_mcp_tool_metadata.py — keep it green when editing metadata here.
+
+# Every tool takes `namespace`; the semantics are identical everywhere, so the
+# schema description is shared. Each namespace is one SQLite file (BET 4).
+_NS = Annotated[
+    str,
+    Field(
+        description=(
+            "Isolation key for one memory store. Each namespace is a separate "
+            "local SQLite file under LM_DATA_ROOT (default ~/.lean_memory); "
+            "namespaces never see each other's facts. Use one per agent, "
+            "project, or user whose memory must stay separate. Created on "
+            "first access."
+        )
+    ),
+]
+
+# Local-engine annotation baseline: everything operates on local SQLite files —
+# a closed world (openWorldHint=False on every tool).
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    )
+)
+def memory_add(
+    namespace: _NS,
+    text: Annotated[
+        str,
+        Field(
+            description=(
+                "Natural-language text to remember (a message, note, or "
+                "observation). It is distilled into discrete facts, not "
+                "stored verbatim."
+            )
+        ),
+    ],
+) -> str:
+    """Distill durable facts from text and write them to a namespace's memory.
+
+    The raw text is NOT stored verbatim: an extraction pass distills it into
+    discrete facts, which are embedded and indexed for memory_search. Returns
+    how many facts were written (possibly 0 if nothing extractable). Additive
+    only — never overwrites or deletes existing facts; contradictions are
+    handled by supersession, with full history retained. Creates the namespace
+    on first write.
+
+    Use it after learning durable information worth recalling in later
+    sessions (preferences, decisions, biographical facts) — not for transient
+    chatter, and not to re-state facts already in memory (use memory_search to
+    check what is already known; use memory_clear to delete a namespace).
+    With the [extract]/[models] extras installed, the first call in a fresh
+    environment downloads model weights (one-time, can take minutes); the call
+    blocks until done.
+    """
     written = _mem(namespace).add(namespace, text)
     n = len(written)
     return f"wrote {n} fact{'s' if n != 1 else ''}"
 
 
-@mcp.tool()
-def memory_search(namespace: str, query: str, k: int = 5) -> str:
-    """Search a namespace's memory and return the top-k facts as a bulleted list."""
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def memory_search(
+    namespace: _NS,
+    query: Annotated[
+        str,
+        Field(
+            description=(
+                "Natural-language search query; matched against stored facts "
+                "by hybrid vector + full-text retrieval, then reranked."
+            )
+        ),
+    ],
+    k: Annotated[
+        int,
+        Field(
+            description="Maximum number of facts to return (top-k after reranking).",
+            ge=1,
+        ),
+    ] = 5,
+) -> str:
+    """Retrieve the facts most relevant to a query from a namespace's memory.
+
+    Read-only with respect to memory content: it never modifies or deletes
+    stored facts (searching a namespace that does not exist yet returns
+    "No facts found.", though the empty store file is created as a side
+    effect). Returns up to k facts as a bulleted list,
+    deduplicated, most relevant first.
+
+    Use it before answering anything that may depend on prior context —
+    preferences, past decisions, earlier sessions. Facts only exist here if
+    something wrote them via memory_add; memory_clear deletes a whole
+    namespace. With the [models] extra installed, the first call in a fresh
+    environment downloads model weights (one-time); the call blocks until
+    done.
+    """
     hits = _mem(namespace).search(namespace, query, k=k)
     if not hits:
         return "No facts found."
@@ -180,9 +280,20 @@ def memory_search(namespace: str, query: str, k: int = 5) -> str:
     return "\n".join(bullets)
 
 
-@mcp.tool()
-def memory_clear(namespace: str) -> str:
-    """Delete all memory for a namespace by removing its SQLite file. Irreversible.
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
+def memory_clear(namespace: _NS) -> str:
+    """Delete ALL memory for a namespace by removing its SQLite file. Irreversible.
+
+    Use only when the namespace's entire history should be forgotten; there is
+    no per-fact deletion. Idempotent — clearing a missing namespace succeeds as
+    a no-op. Other namespaces are untouched.
 
     Refuses (returns an explanatory message, changing nothing) while a LIVE maintenance
     lease with a fresh heartbeat is held for the namespace (spec §7.3): a POSIX unlink
@@ -229,8 +340,28 @@ def memory_clear(namespace: str) -> str:
 # CLI. memory_maintenance_status is provably model-free (it never calls _mem()).
 
 
-@mcp.tool()
-def memory_maintenance_run(namespace: str, apply: bool = False) -> dict[str, Any]:
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    )
+)
+def memory_maintenance_run(
+    namespace: _NS,
+    apply: Annotated[
+        bool,
+        Field(
+            description=(
+                "False (default): dry-run — compute the full would-do report "
+                "with zero writes. True: claim the maintenance lease, apply "
+                "the provably-safe auto band, and stage judgment-call "
+                "proposals for review via memory_review_queue."
+            )
+        ),
+    ] = False,
+) -> dict[str, Any]:
     """Run one sleep-time maintenance pass on a namespace (§6.3).
 
     DRY-RUN by default (apply=False): computes the full would-do report with ZERO
@@ -247,8 +378,13 @@ def memory_maintenance_run(namespace: str, apply: bool = False) -> dict[str, Any
     return _report_to_dict(namespace, report, apply=apply, auto_only=False)
 
 
-@mcp.tool()
-def memory_maintenance_status(namespace: str) -> dict[str, Any]:
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def memory_maintenance_status(namespace: _NS) -> dict[str, Any]:
     """Report a namespace's maintenance ledger — runs + pending proposals (§6.3).
 
     MODEL-FREE by contract: this reads the namespace DB directly and NEVER builds the
@@ -258,27 +394,74 @@ def memory_maintenance_status(namespace: str) -> dict[str, Any]:
     return mcp_support.read_status(_data_root(), namespace)
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False,  # listing lazily EXPIRES overdue proposals — a write
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
 def memory_review_queue(
-    namespace: str, kind: Optional[str] = None, limit: int = 20
+    namespace: _NS,
+    kind: Annotated[
+        Optional[str],
+        Field(
+            description=(
+                "Filter to one proposal kind: 'dedup_near' | 'summarize' | "
+                "'evict'. Omit (null) for all kinds."
+            )
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(description="Maximum number of proposals returned.", ge=1),
+    ] = 20,
 ) -> str:
     """List pending maintenance proposals, grouped by entity, with evidence (§6.3).
 
     Each group carries the subject entity and its proposals; each proposal includes its
-    parsed `payload` (the evidence) so a reviewer sees what would change. `kind` filters
-    to one of 'dedup_near' | 'summarize' | 'evict'. Overdue proposals lazily expire.
-    Returns a JSON string (the grouped list).
+    parsed `payload` (the evidence) so a reviewer sees what would change. Not fully
+    read-only: overdue proposals lazily expire (are marked expired) as a side effect of
+    listing. Returns a JSON string (the grouped list). Use memory_review_decide to act
+    on a listed proposal.
     """
     groups = _mem(namespace).review_queue(namespace, kind=kind, limit=limit)
     return json.dumps(groups, sort_keys=True, default=str)
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,  # ADD-only spine: approvals supersede, never erase
+        idempotentHint=False,
+        openWorldHint=False,
+    )
+)
 def memory_review_decide(
-    namespace: str,
-    proposal_id: str,
-    decision: str,
-    edited_text: Optional[str] = None,
+    namespace: _NS,
+    proposal_id: Annotated[
+        str,
+        Field(description="ID of a pending proposal, as listed by memory_review_queue."),
+    ],
+    decision: Annotated[
+        str,
+        Field(
+            description=(
+                "One of 'approve' | 'reject' | 'edit' | 'promote'. 'edit' is "
+                "valid only for summarize proposals; 'promote' only for evict "
+                "proposals."
+            )
+        ),
+    ],
+    edited_text: Annotated[
+        Optional[str],
+        Field(
+            description=(
+                "Human-edited replacement summary text. Required when "
+                "decision='edit'; ignored otherwise."
+            )
+        ),
+    ] = None,
 ) -> str:
     """Decide a maintenance proposal: approve | reject | edit | promote (§6.3).
 
