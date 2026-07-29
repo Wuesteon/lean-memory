@@ -118,9 +118,9 @@ def _fresh_server(tmp_path, monkeypatch):
 
 
 async def _call(srv, name, args):
-    from mcp.shared.memory import create_connected_server_and_client_session
+    from mcp_client_compat import client_session
 
-    async with create_connected_server_and_client_session(srv.mcp._mcp_server) as s:
+    async with client_session(srv.mcp) as s:
         result = await s.call_tool(name, args)
         return result.content[0].text
 

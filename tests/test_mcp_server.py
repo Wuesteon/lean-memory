@@ -64,9 +64,9 @@ def server(tmp_path, monkeypatch):
 
 
 async def _call(server, name, args):
-    from mcp.shared.memory import create_connected_server_and_client_session
+    from mcp_client_compat import client_session
 
-    async with create_connected_server_and_client_session(server.mcp._mcp_server) as session:
+    async with client_session(server.mcp) as session:
         result = await session.call_tool(name, args)
         # CallToolResult.content is a list of content blocks; the first is text.
         return result.content[0].text
