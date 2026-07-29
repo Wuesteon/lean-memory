@@ -9,16 +9,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
-
+from ._mcp_compat import MCPServerType
 from .config import ConsoleConfig
 from .engine import EngineGateway
 from .events import EventLog
 from .mcp_tools import register_maintenance_tools, register_review_prompt
 
 
-def build_mcp(gateway: EngineGateway) -> FastMCP:
-    mcp = FastMCP("lean-memory-console")
+def build_mcp(gateway: EngineGateway) -> MCPServerType:
+    mcp = MCPServerType("lean-memory-console")
 
     @mcp.tool()
     async def memory_add(

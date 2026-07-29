@@ -1,4 +1,4 @@
-"""Tool metadata contract for the MCP server (WP12).
+"""Tool metadata contract for the MCP server (WP13).
 
 MCP directories (e.g. Glama) grade each tool on exactly what the server sends
 over `tools/list`: the description and the inputSchema. Three things they (and

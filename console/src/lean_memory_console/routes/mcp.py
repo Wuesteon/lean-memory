@@ -49,9 +49,9 @@ from __future__ import annotations
 import secrets
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from .._mcp_compat import MCPServerType, make_http_server_and_app
 from ..config import ConsoleConfig
 from ..engine import EngineGateway
 from ..mcp_tools import register_maintenance_tools
@@ -78,14 +78,16 @@ _ALLOWED_ORIGINS = [
 
 def _build_http_mcp(
     gateway: EngineGateway, extra_allowed_hosts: list[str] | None = None
-) -> FastMCP:
+) -> tuple[MCPServerType, Any]:
     # Loopback defaults + any operator-supplied patterns (LM_MCP_ALLOWED_HOSTS),
     # de-duplicated while preserving order.
     allowed_hosts = list(_DEFAULT_ALLOWED_HOSTS)
     for host in extra_allowed_hosts or []:
         if host not in allowed_hosts:
             allowed_hosts.append(host)
-    mcp = FastMCP(
+    # The compat factory places the transport kwargs where the installed SDK
+    # major wants them (1.x: constructor; 2.x: streamable_http_app call).
+    mcp, build_app = make_http_server_and_app(
         "lean-memory-console",
         stateless_http=True,
         json_response=True,
@@ -130,7 +132,7 @@ def _build_http_mcp(
     # here — MCP prompts are a stdio-client capability; HTTP clients use the tools.
     register_maintenance_tools(mcp, gateway)
 
-    return mcp
+    return mcp, build_app
 
 
 def build_mcp_mount(gateway: EngineGateway, config: ConsoleConfig):
@@ -142,8 +144,8 @@ def build_mcp_mount(gateway: EngineGateway, config: ConsoleConfig):
     enter its ``run()`` in the app lifespan (see module docstring, decision 1) —
     there is no per-request fallback, because ``run()`` is once-only per instance.
     """
-    mcp = _build_http_mcp(gateway, config.mcp_allowed_hosts)
-    inner = mcp.streamable_http_app()
+    mcp, build_app = _build_http_mcp(gateway, config.mcp_allowed_hosts)
+    inner = build_app()
     session_manager = mcp.session_manager  # initializes it on the inner app
     # None when no api_key is configured, so the constant-time compare below
     # always fails (compare_digest is skipped for a None expected value).

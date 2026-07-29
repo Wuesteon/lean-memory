@@ -6,9 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **mcp SDK 2.0 supported; pin widened to `mcp>=1.2,<3`** (WP12, core
+  `[mcp]` extra and console): a small dual-path compat layer handles the
+  2.0 `FastMCP` → `MCPServer` rename, the ctor `version=`, transport params
+  moving to `streamable_http_app(...)`, and the in-memory test client. The
+  v0.2.2 emergency `<2` cap is lifted; 1.x environments keep working.
+
+### Fixed
+
+- **MCP server crashed under mcp 2.0's threading model**: the 2.0 SDK runs
+  sync tool handlers in worker threads (1.x ran them inline on the event
+  loop), tripping SQLite's same-thread guard on every tool call. The store
+  connection now opens with `check_same_thread=False` — safe for the serial
+  MCP traffic pattern since CPython's sqlite3 is built threadsafety=3
+  (serialized).
+
 ### Added
 
-- **MCP tool metadata (WP12)** — every server tool now ships
+- **MCP tool metadata (WP13)** — every server tool now ships
   `ToolAnnotations` (`readOnlyHint`/`destructiveHint`/`idempotentHint`,
   `openWorldHint=False`), a description for every inputSchema parameter
   (previously 0% coverage — bare type hints), and when-to-use guidance with

@@ -32,9 +32,10 @@ def test_pyproject_declares_mcp_extra_and_script():
     data = tomllib.loads(PYPROJECT.read_text())
     extras = data["project"]["optional-dependencies"]
     assert "mcp" in extras, "an 'mcp' optional extra must be declared"
-    # The <2 cap is load-bearing: mcp 2.0.0 removed mcp.server.fastmcp, which
-    # the server imports. Lift only with a verified 2.0 MCPServer migration.
-    assert any(req.startswith("mcp>=") and req.endswith(",<2") for req in extras["mcp"]), extras["mcp"]
+    # The <3 cap is load-bearing: the dual-path compat layer (WP12) knows the
+    # 1.x and 2.x APIs; an unreleased major would install untested. Widen only
+    # with a verified migration, as with 2.0.
+    assert any(req.startswith("mcp>=") and req.endswith(",<3") for req in extras["mcp"]), extras["mcp"]
     scripts = data["project"].get("scripts", {})
     assert scripts.get("lean-memory-mcp") == "lean_memory.mcp_server:main"
 
@@ -64,9 +65,9 @@ def server(tmp_path, monkeypatch):
 
 
 async def _call(server, name, args):
-    from mcp.shared.memory import create_connected_server_and_client_session
+    from mcp_client_compat import client_session
 
-    async with create_connected_server_and_client_session(server.mcp._mcp_server) as session:
+    async with client_session(server.mcp) as session:
         result = await session.call_tool(name, args)
         # CallToolResult.content is a list of content blocks; the first is text.
         return result.content[0].text
