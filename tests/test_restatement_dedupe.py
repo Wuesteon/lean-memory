@@ -41,27 +41,15 @@ def test_trivial_formatting_variants_are_treated_as_restatements(tmp_path):
     mem.add("ns", "I work at Acme,", t_ref=2_000)
     mem.add("ns", "I WORK AT Acme.", t_ref=3_000)
     mem.add("ns", "I  work at\tAcme.", t_ref=4_000)
+    # The ENTITY-surface case variant belongs here too since WP15: 'i'/'acme'
+    # used to resolve to their own entities (BINARY-collation name match), land
+    # in a different slot, and bypass this skip entirely. That was pinned as a
+    # known limit; entity resolution now folds case (tests/test_entity_collation.py),
+    # so it is just another trivial variant.
+    mem.add("ns", "i work at acme.", t_ref=5_000)
 
     rows = _facts_in(mem, "ns", "works_at")
     assert len(rows) == 1, f"formatting variants stacked rows: {[r['fact_text'] for r in rows]}"
-    mem.close()
-
-
-def test_entity_case_variant_splits_the_slot_known_limit(tmp_path):
-    """KNOWN LIMIT, pinned: a case variant of the ENTITY surface form ('acme'
-    vs 'Acme') resolves to a different entity via upsert_entity's BINARY-
-    collation name match, so it lands in a different slot and bypasses both
-    restatement dedupe and contradiction resolution. Fixing this is an
-    entity-resolution change (collation policy on every lookup, with real
-    distinct-by-case counterexamples like 'Polish'/'polish') — out of WP11
-    scope. If this test starts failing with 1 row, that fix landed: fold the
-    lowercase variant into the trivial-variants test above and delete this."""
-    mem = Memory(root=tmp_path)
-    mem.add("ns", "I work at Acme.", t_ref=1_000)
-    mem.add("ns", "i work at acme.", t_ref=2_000)
-
-    rows = _facts_in(mem, "ns", "works_at")
-    assert len(rows) == 2
     mem.close()
 
 

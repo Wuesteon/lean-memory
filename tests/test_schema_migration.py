@@ -1,22 +1,30 @@
-"""Schema v2 migration + the ledger/proposal CRUD (design spec §5, §4.0).
+"""Schema migrations (v1→v2→v3) + the ledger/proposal CRUD (design spec §5, §4.0).
 
-The migration is the project's FIRST persisted-format change, so it carries a
-checked-in v1-format fixture DB (tests/fixtures/v1_format.db, built by
-make_v1_fixture.py) and pins the whole 1→2 upgrade end-to-end:
+Each persisted-format change carries a checked-in fixture DB of the format it
+upgrades FROM (tests/fixtures/v1_format.db, v2_format.db — built by
+make_v1_fixture.py / make_v2_fixture.py) and pins the upgrade end-to-end:
 
   - a genuine v1-format file opens, migrates ONCE (adds fact.record_kind + the
-    maintenance tables), and REOPENS cleanly — the ALTER-idempotence trap, where a
-    second open would raise 'duplicate column name' if the ADD COLUMN lived in the
-    always-run schema blob instead of the versioned `< 2` branch;
-  - after migration user_version == 2 and a search still round-trips;
-  - the fresh-create path stamps 2 and reopens clean;
+    maintenance tables, then entity.name_key + ix_entity_key), and REOPENS
+    cleanly — the ALTER-idempotence trap, where a second open would raise
+    'duplicate column name' if the ADD COLUMN lived in the always-run schema blob
+    instead of the versioned branch;
+  - a genuine v2-format file migrates 2→3: name_key is backfilled for EVERY
+    pre-existing row, the file reopens clean, and pre-existing case-split entity
+    rows keep both rows and both facts (the migration backfills, it never heals);
+  - after migration user_version == the current version and a search still
+    round-trips;
+  - the fresh-create path stamps the current version and reopens clean — a fresh
+    DB is stamped 1 and flows through the SAME versioned branches, so a column
+    declared in the always-run blob AND ALTERed here would break every
+    first-run;
   - a DB stamped by a newer release is never downgraded.
 
 The CRUD half pins pure row round-trips plus the ux_run_live partial-unique-index
 race (a second live run for a namespace hits the constraint). No decide/apply
 logic is exercised here — that is a later task.
 
-All offline (no model download); the fixture's tiny 8-dim vectors are opened with
+All offline (no model download); the fixtures' tiny 8-dim vectors are opened with
 matching dims so _check_existing_dims passes.
 """
 
@@ -29,12 +37,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from lean_memory.normalize import normalize_text
 from lean_memory.store.sqlite_store import SqliteStore
 from lean_memory.types import Entity, Episode, Fact
 
 FIXTURE_SRC = Path(__file__).parent / "fixtures" / "v1_format.db"
-# The fixture was built with these tiny dims (make_v1_fixture.py); the store must
-# open it with matching dims or _check_existing_dims refuses the vec0 mismatch.
+V2_FIXTURE_SRC = Path(__file__).parent / "fixtures" / "v2_format.db"
+# The fixtures were built with these tiny dims (make_v*_fixture.py); the store must
+# open them with matching dims or _check_existing_dims refuses the vec0 mismatch.
 FIXTURE_DIM = 8
 FIXTURE_COARSE_DIM = 4
 
@@ -52,6 +62,18 @@ def v1_db(tmp_path):
     )
     dst = tmp_path / "v1user.db"
     shutil.copy(FIXTURE_SRC, dst)
+    return dst
+
+
+@pytest.fixture
+def v2_db(tmp_path):
+    """A writable copy of the checked-in v2-format fixture."""
+    assert V2_FIXTURE_SRC.exists(), (
+        f"missing {V2_FIXTURE_SRC} — rebuild it with "
+        "`.venv/bin/python tests/fixtures/make_v2_fixture.py`"
+    )
+    dst = tmp_path / "v2user.db"
+    shutil.copy(V2_FIXTURE_SRC, dst)
     return dst
 
 
@@ -77,10 +99,11 @@ def test_v1_fixture_is_genuinely_v1(v1_db):
         db.close()
 
 
-def test_v1_migrates_once_to_v2(v1_db):
+def test_v1_migrates_once_to_current_version(v1_db):
+    """A v1 file crosses BOTH versioned branches in a single open (1→2→3)."""
     store = SqliteStore(v1_db, dim=FIXTURE_DIM, coarse_dim=FIXTURE_COARSE_DIM)
     try:
-        assert _user_version(store) == 2, "upgraded to schema v2"
+        assert _user_version(store) == 3, "upgraded to schema v3"
         # record_kind added, default 'fact' backfilled on the existing rows.
         cols = [r[1] for r in store._db.execute("PRAGMA table_info(fact)").fetchall()]
         assert "record_kind" in cols
@@ -96,20 +119,28 @@ def test_v1_migrates_once_to_v2(v1_db):
             ).fetchall()
         }
         assert {"fact_derivation", "maintenance_run", "maintenance_proposal"} <= tables
+        # ...and the v3 half: entity.name_key backfilled from the surface form.
+        ent_cols = [
+            r[1] for r in store._db.execute("PRAGMA table_info(entity)").fetchall()
+        ]
+        assert "name_key" in ent_cols
+        rows = store._db.execute("SELECT name, name_key FROM entity").fetchall()
+        assert rows, "the fixture carries entities to backfill"
+        assert all(r["name_key"] == normalize_text(r["name"]) for r in rows)
     finally:
         store.close()
 
 
 def test_v1_reopens_cleanly_after_migration(v1_db):
     """The ALTER-idempotence trap: a SECOND open must not raise 'duplicate column
-    name'. This is the whole point of gating the ADD COLUMN behind `user_version < 2`
-    instead of putting it in the always-run schema blob."""
+    name'. This is the whole point of gating each ADD COLUMN behind its
+    `user_version < N` branch instead of putting it in the always-run schema blob."""
     SqliteStore(v1_db, dim=FIXTURE_DIM, coarse_dim=FIXTURE_COARSE_DIM).close()
 
     # A real second open of the now-migrated file — must be clean.
     reopened = SqliteStore(v1_db, dim=FIXTURE_DIM, coarse_dim=FIXTURE_COARSE_DIM)
     try:
-        assert _user_version(reopened) == 2
+        assert _user_version(reopened) == 3
     finally:
         reopened.close()
 
@@ -141,26 +172,136 @@ def test_migrated_v1_search_roundtrips(v1_db):
         store.close()
 
 
-# ── Migration: fresh-create + no-downgrade (the same versioned branch) ──
-def test_fresh_create_stamps_v2_and_reopens_clean(tmp_path):
+# ── Migration: the v2-format fixture (2→3, WP15) ──
+def test_v2_fixture_is_genuinely_v2(v2_db):
+    """Guard the fixture itself: a v2 file (version 2, record_kind + maintenance
+    tables present, entity.name_key ABSENT) — otherwise the 2→3 test proves
+    nothing."""
+    db = sqlite3.connect(v2_db)
+    try:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        fact_cols = [r[1] for r in db.execute("PRAGMA table_info(fact)").fetchall()]
+        assert "record_kind" in fact_cols
+        ent_cols = [r[1] for r in db.execute("PRAGMA table_info(entity)").fetchall()]
+        assert "name_key" not in ent_cols
+        tables = {
+            r[0]
+            for r in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert {"fact_derivation", "maintenance_run", "maintenance_proposal"} <= tables
+        indexes = {
+            r[0]
+            for r in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        assert "ix_entity_key" not in indexes
+    finally:
+        db.close()
+
+
+def test_v2_migrates_once_to_v3(v2_db):
+    """The 2→3 upgrade: ALTER + Python backfill (SQLite has no casefold()) +
+    ix_entity_key, all inside the versioned branch."""
+    store = SqliteStore(v2_db, dim=FIXTURE_DIM, coarse_dim=FIXTURE_COARSE_DIM)
+    try:
+        assert _user_version(store) == 3
+        cols = [r[1] for r in store._db.execute("PRAGMA table_info(entity)").fetchall()]
+        assert "name_key" in cols
+
+        rows = store._db.execute("SELECT name, name_key FROM entity").fetchall()
+        assert len(rows) >= 3, "the fixture carries several pre-existing entities"
+        for r in rows:
+            assert r["name_key"] == normalize_text(r["name"]), (
+                f"{r['name']!r} not backfilled"
+            )
+            assert r["name_key"] != "", "no row may be left on the DEFAULT ''"
+
+        indexes = {
+            r[0]
+            for r in store._db.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        assert "ix_entity_key" in indexes
+    finally:
+        store.close()
+
+
+def test_v2_reopens_cleanly_after_migration(v2_db):
+    """ALTER-idempotence again, for the v3 branch: the second open must not raise
+    'duplicate column name: name_key'."""
+    SqliteStore(v2_db, dim=FIXTURE_DIM, coarse_dim=FIXTURE_COARSE_DIM).close()
+
+    reopened = SqliteStore(v2_db, dim=FIXTURE_DIM, coarse_dim=FIXTURE_COARSE_DIM)
+    try:
+        assert _user_version(reopened) == 3
+    finally:
+        reopened.close()
+
+
+def test_v2_case_split_entities_are_not_healed(v2_db):
+    """Forward-fix only: the migration BACKFILLS, it never re-points a fact. A
+    pre-existing 'Acme'/'ACME' split keeps both rows and both facts (healing
+    would need a new mutation verb — deliberately deferred). The next mention
+    resolves to the OLDEST row, so the store converges going forward with one
+    legacy remnant."""
+    store = SqliteStore(v2_db, dim=FIXTURE_DIM, coarse_dim=FIXTURE_COARSE_DIM)
+    try:
+        split = store._db.execute(
+            "SELECT id, name, created_at FROM entity WHERE name_key='acme' "
+            "ORDER BY created_at, id"
+        ).fetchall()
+        assert [r["name"] for r in split] == ["Acme", "ACME"], "both rows survive"
+        for row in split:
+            owned = store._db.execute(
+                "SELECT COUNT(*) c FROM fact WHERE subject_id=?", (row["id"],)
+            ).fetchone()["c"]
+            assert owned == 1, "each legacy row keeps its own facts"
+
+        namespace = store._db.execute("SELECT namespace FROM entity").fetchone()[
+            "namespace"
+        ]
+        resolved = store.upsert_entity(
+            Entity(namespace=namespace, name="aCmE", type=None)
+        )
+        assert resolved.id == split[0]["id"], "oldest row wins the tie-break"
+        assert (
+            store._db.execute(
+                "SELECT COUNT(*) c FROM entity WHERE name_key='acme'"
+            ).fetchone()["c"]
+            == 2
+        ), "still two rows — resolving neither heals nor duplicates"
+    finally:
+        store.close()
+
+
+# ── Migration: fresh-create + no-downgrade (the same versioned branches) ──
+def test_fresh_create_stamps_current_version_and_reopens_clean(tmp_path):
     path = tmp_path / "fresh.db"
     store = SqliteStore(path, dim=768)
-    assert _user_version(store) == 2
-    # record_kind present on a fresh DB too (same ALTER branch, fresh is version 1
-    # at that point).
+    assert _user_version(store) == 3
+    # record_kind + name_key present on a fresh DB too (same ALTER branches —
+    # fresh is version 1 at that point and flows through both). Neither column
+    # may be declared in the always-run blob, or this open would have raised
+    # 'duplicate column name'.
     cols = [r[1] for r in store._db.execute("PRAGMA table_info(fact)").fetchall()]
     assert "record_kind" in cols
+    ent_cols = [r[1] for r in store._db.execute("PRAGMA table_info(entity)").fetchall()]
+    assert "name_key" in ent_cols
     store.close()
 
     reopened = SqliteStore(path, dim=768)  # must not raise
-    assert _user_version(reopened) == 2
+    assert _user_version(reopened) == 3
     reopened.close()
 
 
 def test_newer_version_db_not_downgraded(tmp_path):
     path = tmp_path / "future.db"
     store = SqliteStore(path, dim=768)
-    store._db.execute("PRAGMA user_version = 5")  # a hypothetical v>2 release
+    store._db.execute("PRAGMA user_version = 5")  # a hypothetical v>3 release
     store._db.commit()
     store.close()
 

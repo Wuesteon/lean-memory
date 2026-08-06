@@ -19,6 +19,18 @@ CREATE TABLE IF NOT EXISTS episode (
 );
 
 -- ── ENTITY LAYER ────────────────────────────────────────────────────
+-- NOTE (schema v3): `name` is the FIRST-SEEN surface form, kept verbatim for
+-- display. Identity resolves on `entity.name_key` (NFC + casefold + whitespace
+-- collapse of `name`) via ix_entity_key. BOTH the name_key column and that index
+-- live ONLY in the versioned `if user_version < 3:` branch of _init_schema and
+-- must never appear here: this blob runs on EVERY open, so (a) an index over
+-- name_key here would reference a column a pre-v3 file does not have, and (b)
+-- declaring name_key in the table below would collide with the branch's ADD
+-- COLUMN on every FRESH store ('duplicate column name: name_key' — a fresh DB is
+-- stamped 1 and flows through the same branch). Same trap as fact.record_kind.
+-- (Keep DDL keywords out of these comment lines: the console's engine-schema
+-- tripwire, inspect_sql.compute_engine_schema_fingerprint, digests every line
+-- containing one, so a prose mention flips its hash with the DDL unchanged.)
 CREATE TABLE IF NOT EXISTS entity (
   id          TEXT PRIMARY KEY,
   namespace   TEXT NOT NULL,

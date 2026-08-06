@@ -66,6 +66,53 @@ def test_inference_cue_word_boundary():
     assert all(t.is_inference == 0 for t in typed)
 
 
+# ── first-person detection is case-insensitive (WP15, issue #14) ──
+def _subjects(raw: str) -> list[str]:
+    ep = Episode(namespace="t", raw=raw, t_ref=1_700_000_000_000)
+    return [c.subject_name for c in StubCandidateGenerator().generate(ep)]
+
+
+def test_lowercase_first_person_resolves_to_the_default_subject():
+    """WP15's extractor half. `_FIRST_PERSON` used to be case-SENSITIVE (unlike
+    RulesExtractor's, which has carried re.I since Phase 0), so a chat user
+    typing a lowercase 'i' fell through to the Capitalized-run/lead-token
+    subject fallback and got an entity literally named 'i'. That is half of
+    issue #14 — the store-side name_key fold alone does NOT close it, because
+    the split is 'user' vs 'i', not 'Acme' vs 'acme'."""
+    assert _subjects("i work at acme.") == ["user"]
+
+
+@pytest.mark.parametrize(
+    "raw,was",
+    [
+        ("Mine uses explosives.", "Mine"),
+        ("ME uses Postgres.", "ME"),
+        ("The company Acme uses i as a variable.", "The"),
+    ],
+)
+def test_re_i_first_person_false_merge_class_is_pinned(raw, was):
+    """KNOWN REGRESSION CLASS, pinned — the price of the re.I above.
+
+    `my`/`me`/`mine` were already lowercase in the pattern, so re.I admits not
+    only the wanted lowercase 'i' but also 'ME', 'Mine', 'MY', and a bare 'i'
+    ANYWHERE in the sentence. A sentence whose genuine subject is that noun is
+    silently re-attributed to `default_subject` — a false merge into 'user',
+    the busiest slot in any store. It is bounded (the token must appear before
+    the relation verb) and recoverable on the same as_of/history terms as the
+    entity-fold known limit, but it is a DECISION, not an accident: this test
+    is what makes it one. (`was` records the pre-WP15 subject.)
+
+    Note what is NOT a test of this change: "my budget is 40 euros." already
+    resolved to 'user' before re.I, because `my` is lowercase in the pattern.
+    The only genuinely-new lowercase form is the bare `i`."""
+    assert _subjects(raw) == ["user"], f"pre-WP15 this was {was!r}"
+
+
+def test_lowercase_my_was_already_first_person():
+    """The control for the test above — unchanged by re.I in both directions."""
+    assert _subjects("my budget is 40 euros.") == ["user"]
+
+
 # ── contradiction → supersession ──
 def test_supersession_via_contradiction_resolver(mem):
     mem.add("u", "I work at Acme.", t_ref=1_700_000_000_000)
