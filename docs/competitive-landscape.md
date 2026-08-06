@@ -262,3 +262,156 @@ Results (2026-07-29):
 | restatement_no_duplicate | latest-set-exact | PASS |  |
 
 **ALL PASS** — 26/26 assertions.
+
+### mem0 comparison arm (2026-08-07)
+
+The same ten scenarios, the same assertion names, run against mem0 OSS instead
+of lean-memory (`bench/update_integrity.py --arm mem0`, adapter class
+`Mem0Arm`). The arm is opt-in and never skips silently: without `mem0ai`
+installed the tool exits **2** with the hint `pip install mem0ai`.
+
+Reproduce (a local LLM + embedder are required — this run used Ollama, no
+cloud calls, `MEM0_TELEMETRY=false`):
+
+```bash
+pip install mem0ai ollama
+ollama pull qwen2.5:3b && ollama pull nomic-embed-text
+MEM0_TELEMETRY=false PYTHONPATH=src python bench/update_integrity.py --markdown            # arm A
+MEM0_TELEMETRY=false PYTHONPATH=src python bench/update_integrity.py --arm mem0 --markdown # arm B
+```
+
+**Fairness rule.** The adapter maps each scenario onto mem0's own public API as
+faithfully as that API allows and runs the identical assertions under the
+identical names; no assertion is relaxed for one arm or tightened for the
+other. Substring matching is case-insensitive in both arms (mem0 rewrites a
+turn into third person, lean-memory keeps the source sentence; casing must not
+decide a comparison). Where mem0's API has no equivalent of the concept under
+test, the adapter probes the installed library at runtime and renders
+`n/a (unsupported)` with mem0's own refusal quoted in the Detail cell; those
+rows are excluded from the PASS tally rather than counted against either arm.
+
+| Scenario concept | lean-memory 0.2.4 | mem0 2.0.17 (OSS) |
+|---|---|---|
+| ingest one turn | `Memory.add(ns, text, t_ref=t)` | `Memory.add(text, user_id=ns)` |
+| turn timestamp | `t_ref=` | not available — `add(timestamp=…)` raises `ValueError: The timestamp parameter is not supported by the OSS Memory SDK.`; turns are ingested in wall-clock order |
+| query | `Memory.search(ns, q, k=10)` | `Memory.search(q, filters={"user_id": ns}, top_k=10)` |
+| current set | `search(...)` (latest only) | `get_all(filters={"user_id": ns})` |
+| retired-but-queryable | `search(is_latest_only=False)` → `is_latest=0` + `superseded_by` | no equivalent field; the adapter accepts mem0's own `Memory.history(id)` UPDATE/DELETE record as the analogue |
+| point-in-time read | `search(as_of=…)` | not available — `search(reference_date=…)` raises `ValueError: The reference_date parameter is not supported by the OSS Memory SDK.` |
+
+**Arm A — lean-memory** (same machine, same interpreter, same day as arm B):
+
+# Update-integrity results — lean-memory 0.2.4 (offline stub backends, Python 3.14.6)
+
+| Scenario | Assertion | Result | Detail |
+|---|---|---|---|
+| employer_change | top1-is-current | PASS |  |
+| employer_change | old-fact-retired | PASS |  |
+| employer_change | as-of-returns-old-truth | PASS |  |
+| name_identity_change | top1-is-current | PASS |  |
+| name_identity_change | old-fact-retired | PASS |  |
+| name_identity_change | as-of-returns-old-truth | PASS |  |
+| city_move | top1-is-current | PASS |  |
+| city_move | old-fact-retired | PASS |  |
+| city_move | as-of-returns-old-truth | PASS |  |
+| preference_flip | top1-is-current | PASS |  |
+| preference_flip | old-fact-retired | PASS |  |
+| preference_flip | as-of-returns-old-truth | PASS |  |
+| additive_extends | top1-is-current | PASS |  |
+| additive_extends | latest-set-exact | PASS |  |
+| replacement_after_additive | top1-is-current | PASS |  |
+| replacement_after_additive | old-fact-retired | PASS |  |
+| replacement_after_additive | latest-set-exact | PASS |  |
+| multivalued_preserved | top1-is-current | PASS |  |
+| multivalued_preserved | latest-set-exact | PASS |  |
+| as_of_before_everything | top1-is-current | PASS |  |
+| as_of_before_everything | as-of-returns-old-truth | PASS |  |
+| restart_persistence | top1-is-current | PASS |  |
+| restart_persistence | old-fact-retired | PASS |  |
+| restart_persistence | as-of-returns-old-truth | PASS |  |
+| restatement_no_duplicate | top1-is-current | PASS |  |
+| restatement_no_duplicate | latest-set-exact | PASS |  |
+
+**ALL PASS** — 26/26 assertions.
+
+**Arm B — mem0** (`mem0ai` 2.0.17, `ollama` client 0.6.2, `qdrant-client`
+1.19.0, macOS 15, run 2026-08-07; verdict-identical across two consecutive
+runs; ~23 s of scenario wall-clock in total):
+
+# Update-integrity results — mem0 2.0.17 (llm=ollama/qwen2.5:3b, embedder=ollama/nomic-embed-text (768d), vector_store=qdrant (local, on-disk), ollama_base_url=http://localhost:11434, Python 3.14.6)
+
+*Same scenarios and same assertion names as the lean-memory arm. `n/a (unsupported)` marks an assertion with no equivalent in this library's public API (probed at runtime — the library's own refusal is quoted in Detail); those rows are excluded from the PASS tally.*
+
+| Scenario | Assertion | Result | Detail |
+|---|---|---|---|
+| employer_change | top1-is-current | PASS |  |
+| employer_change | old-fact-retired | FAIL | no retirement record for 'Acme': it is absent from the live set and no UPDATE/DELETE row in mem0's history carries it (mem0's LLM emitted 1 memory event(s) [ADD] across 2 add() call(s)) |
+| employer_change | as-of-returns-old-truth | n/a (unsupported) | mem0 2.0.17 has no point-in-time read: search(reference_date=…) → ValueError: The reference_date parameter is not supported by the OSS Memory SDK.; add(timestamp=…) → ValueError: The timestamp parameter is not supported by the OSS Memory SDK. |
+| name_identity_change | top1-is-current | PASS |  |
+| name_identity_change | old-fact-retired | FAIL | no retirement record for 'engineer': it is absent from the live set and no UPDATE/DELETE row in mem0's history carries it (mem0's LLM emitted 1 memory event(s) [ADD] across 2 add() call(s)) |
+| name_identity_change | as-of-returns-old-truth | n/a (unsupported) | mem0 2.0.17 has no point-in-time read: search(reference_date=…) → ValueError: The reference_date parameter is not supported by the OSS Memory SDK.; add(timestamp=…) → ValueError: The timestamp parameter is not supported by the OSS Memory SDK. |
+| city_move | top1-is-current | PASS |  |
+| city_move | old-fact-retired | FAIL | no retirement record for 'Berlin': it is absent from the live set and no UPDATE/DELETE row in mem0's history carries it (mem0's LLM emitted 1 memory event(s) [ADD] across 2 add() call(s)) |
+| city_move | as-of-returns-old-truth | n/a (unsupported) | mem0 2.0.17 has no point-in-time read: search(reference_date=…) → ValueError: The reference_date parameter is not supported by the OSS Memory SDK.; add(timestamp=…) → ValueError: The timestamp parameter is not supported by the OSS Memory SDK. |
+| preference_flip | top1-is-current | PASS |  |
+| preference_flip | old-fact-retired | FAIL | no retirement record for 'vim': it is absent from the live set and no UPDATE/DELETE row in mem0's history carries it (mem0's LLM emitted 1 memory event(s) [ADD] across 2 add() call(s)) |
+| preference_flip | as-of-returns-old-truth | n/a (unsupported) | mem0 2.0.17 has no point-in-time read: search(reference_date=…) → ValueError: The reference_date parameter is not supported by the OSS Memory SDK.; add(timestamp=…) → ValueError: The timestamp parameter is not supported by the OSS Memory SDK. |
+| additive_extends | top1-is-current | PASS |  |
+| additive_extends | latest-set-exact | FAIL | latest=['User works at Acme and Globex.'] expected-substrings=('Acme', 'Globex') (mem0's LLM emitted 1 memory event(s) [ADD] across 2 add() call(s)) |
+| replacement_after_additive | top1-is-current | FAIL | expected 'Zorbex' in top-1, got 'User works at Acme and Globex.' (mem0's LLM emitted 2 memory event(s) [ADD, ADD] across 3 add() call(s)) |
+| replacement_after_additive | old-fact-retired | FAIL | old value is still a current memory in mem0: ['User was previously employed at Acme and Globex, but now works at Zorbex.'] |
+| replacement_after_additive | latest-set-exact | FAIL | latest=['User works at Acme and Globex.', 'User was previously employed at Acme and Globex, but now works at Zorbex.'] expected-substrings=('Zorbex',) (mem0's LLM emitted 2 memory event(s) [ADD, ADD] across 3 add() call(s)) |
+| multivalued_preserved | top1-is-current | PASS |  |
+| multivalued_preserved | latest-set-exact | PASS |  |
+| as_of_before_everything | top1-is-current | FAIL | expected 'Berlin' in top-1, got '<no results>' (mem0's LLM emitted 0 memory event(s) [none] across 1 add() call(s)) |
+| as_of_before_everything | as-of-returns-old-truth | n/a (unsupported) | mem0 2.0.17 has no point-in-time read: search(reference_date=…) → ValueError: The reference_date parameter is not supported by the OSS Memory SDK.; add(timestamp=…) → ValueError: The timestamp parameter is not supported by the OSS Memory SDK. |
+| restart_persistence | top1-is-current | PASS |  |
+| restart_persistence | old-fact-retired | FAIL | no retirement record for 'Acme': it is absent from the live set and no UPDATE/DELETE row in mem0's history carries it (mem0's LLM emitted 1 memory event(s) [ADD] across 2 add() call(s)) |
+| restart_persistence | as-of-returns-old-truth | n/a (unsupported) | mem0 2.0.17 has no point-in-time read: search(reference_date=…) → ValueError: The reference_date parameter is not supported by the OSS Memory SDK.; add(timestamp=…) → ValueError: The timestamp parameter is not supported by the OSS Memory SDK. |
+| restatement_no_duplicate | top1-is-current | FAIL | expected 'Berlin' in top-1, got '<no results>' (mem0's LLM emitted 0 memory event(s) [none] across 2 add() call(s)) |
+| restatement_no_duplicate | latest-set-exact | FAIL | latest=[] expected-substrings=('Berlin',) (mem0's LLM emitted 0 memory event(s) [none] across 2 add() call(s)) |
+
+**FAILURES PRESENT** — 8/20 assertions. 6 further assertion(s) rendered `n/a (unsupported)` — no equivalent in this arm's API, excluded from the tally.
+
+**Caveats — read before quoting any of this.**
+
+1. **The backbone is small, and it dominates several rows.** mem0 forms
+   memories with a single LLM call that must return JSON. Replaying mem0's own
+   `ADDITIVE_EXTRACTION_PROMPT` directly against qwen2.5:3b returns well-formed
+   but empty JSON (`{"memory": []}`) for an isolated single-sentence turn — so
+   in every scenario mem0 stored nothing from turn 1 and only formed a memory
+   once a second, differing turn supplied conversational context. In
+   `as_of_before_everything` and `restatement_no_duplicate` no such turn exists,
+   so nothing was stored at all; those three FAILs are backbone artefacts and
+   must not be quoted as mem0 results. A larger backbone would plausibly extract
+   on turn 1.
+2. **`old-fact-retired` mixes an architectural fact with a backbone artefact.**
+   Architectural: mem0 2.0.17 OSS has no `is_latest` / `superseded_by` and no
+   way to query a retired value through search — the adapter therefore accepts
+   mem0's own `history()` UPDATE/DELETE record as the analogue. Backbone: since
+   turn 1 stored nothing, there was no separate old memory to retire, and the
+   history log held ADD rows only. The five `no retirement record …` FAILs
+   therefore record the absence of a retired-but-queryable record, not the
+   observed destruction of one. The sixth (`replacement_after_additive`) is a
+   different mode: there the superseded value was still a current memory.
+3. **Granularity differs.** mem0 merges values into one memory string (e.g.
+   `User works at Acme and Globex.`). `latest-set-exact` counts memories, so a
+   merged memory fails the count even though both values appear in its text —
+   the Detail cell shows exactly what was returned.
+4. **The six `n/a (unsupported)` rows are architectural and version-pinned**,
+   not a backbone effect: mem0 2.0.17 OSS rejects both temporal parameters at
+   the API boundary. mem0's hosted Platform advertises them; this arm exercises
+   the OSS package only.
+5. **`replacement_after_additive`** shows mem0's LLM choosing ADD twice rather
+   than UPDATE/DELETE, leaving the stale memory co-resident with — and ranked
+   above — the newer one. Both the event choice and the ranking depend on the
+   backbone and the embedder.
+6. **Scope.** One machine, one backbone (qwen2.5:3b), one embedder
+   (nomic-embed-text), two runs, ten scripted scenarios. This is reproduced,
+   versioned behaviour under the pinned header and nothing more: no accuracy
+   claim on LoCoMo/LongMemEval-style benchmarks, and no claim about mem0's
+   hosted Platform, follows from it.
+
+`--arm mem0` writes a per-turn ingest trace (`add … -> ADD "…"` /
+`no memory extracted`) to stderr, so every row above can be traced back to what
+mem0's LLM actually emitted.
