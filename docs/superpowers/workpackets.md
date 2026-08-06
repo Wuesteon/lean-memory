@@ -631,6 +631,90 @@ accessor.
 
 ---
 
+## WP15 — Entity name collation (`name_key`)
+
+**Branch:** `wp15-entity-collation` · **Blocked by:** — (design:
+`docs/superpowers/specs/2026-08-06-entity-case-collation-decision.md`, rev 2) ·
+**Gate:** lane-A six-week read — **waived by the maintainer 2026-08-07**, with
+the recommendation approved the same day · **Effort:** S · **Lane A — claims
+`memory.py` + `store/` + `extract/`** · Sequenced **before WP4**, whose
+`get_all(subject=…)` is the project's first public name-keyed read and must
+inherit a settled policy rather than invent one.
+
+**Goal:** One real-world subject resolves to one entity regardless of the casing
+the user typed, so the WP11 restatement skip and contradiction resolution — both
+keyed on `(subject_id, predicate)` — actually apply to it. Closes
+[#14](https://github.com/Wuesteon/lean-memory/issues/14).
+
+**Shipped:** option (c) of the decision doc. `entity.name_key` (NFC + casefold +
+whitespace collapse) resolved on `(namespace, name_key, type)` with an
+`ORDER BY created_at, id LIMIT 1` tie-break for legacy split rows; `entity.name`
+keeps the first-seen surface form; schema v3 versioned migration (ALTER + Python
+backfill + `ix_entity_key`, all inside the `< 3` branch, nothing in the
+always-run blob); `normalize_text` promoted to `lean_memory/normalize.py` and
+re-exported from `maintain/transforms.py`; `re.I` on the stub generator's
+`_FIRST_PERSON`; `llm_typer` known-entity canonicalization on the shared key.
+**Not** shipped, deliberately: healing pre-existing splits, object-side entity
+resolution, alias/semantic linking, the `_CAP_RUN` lowercase-proper-noun
+misextraction, console `name_key` adoption (separate package/release).
+
+**Files:** `src/lean_memory/normalize.py` (new), `store/base.py` (contract
+docstring), `store/schema.py` (comment only — no DDL change),
+`store/sqlite_store.py`, `maintain/transforms.py` (re-export),
+`extract/gliner_extractor.py`, `extract/llm_typer.py`,
+`tests/test_entity_collation.py` (new), `tests/fixtures/make_v2_fixture.py` +
+`v2_format.db` (new), `tests/test_schema_migration.py`,
+`tests/test_schema_version.py`, `tests/test_restatement_dedupe.py`,
+`tests/test_phase1_extraction.py`, `README.md`, `CHANGELOG.md`.
+
+**Decisions the design doc delegated to WP15:**
+
+- **The stub's first-person pattern does NOT gain rules.py's `I am`
+  alternative** (§3.1 left this open: add it for real parity, or state the
+  divergence). It is stated, in a comment at the pattern: `I am` is
+  *unreachable*. Alternation is leftmost-first, so wherever `I am` would match
+  the earlier `I` alternative already matches (the `\b` after `I` holds before a
+  space), and both patterns are only ever consumed as a boolean `.search()`.
+  Verified over a 13-case probe including `"I am a doctor."`, `"i am tired"`,
+  `"Iam"`, `"hI am"`: the three patterns (stub with `re.I`, stub + `I am`,
+  rules.py) agree on every input. Adding it would advertise a behavioral
+  difference that does not exist — the same cargo-culting that produced the
+  `_norm`/`normalize_text` drift this packet is undoing. The only remaining
+  divergence is the non-capturing group, which the boolean use does not need.
+- **The shared key is exported as both `normalize_text` and an
+  `entity_key` alias** from `lean_memory.normalize`. One function object, two
+  names: call sites read as what they are (`entity_key(name)` in the store and
+  typer, `normalize_text(fact_text)` in DEDUP-EXACT) while remaining incapable
+  of drifting apart. `router.py`'s `_norm` stays local and unchanged — it is a
+  coref heuristic, not an identity decision.
+- **The replacement known limit is pinned WITH its recoverability.**
+  `test_case_distinct_subjects_merge_known_limit` asserts the merge, the
+  supersession chain (`is_latest=0` + `superseded_by`), *and* that the retired
+  fact is still returned by `search(as_of=…, is_latest_only=False)` — so the
+  doc's "a false merge is recoverable" argument is executable rather than
+  rhetorical.
+- **`schema.py`'s comment avoids DDL keywords.** The console's engine-schema
+  tripwire (`inspect_sql.compute_engine_schema_fingerprint`) digests every line
+  of `store/schema.py` containing `create`, case-insensitively — comments
+  included. A first draft of the v3 note mentioned the statements by name and
+  flipped that hash with the DDL byte-identical, reddening the console suite.
+  Reworded rather than re-baselined, since WP15 must not touch console source.
+  **Recorded for whoever owns the tripwire next:** it digests `schema.py` only,
+  and the real v3 DDL lives in `sqlite_store.py`'s versioned branch — so the
+  tripwire is simultaneously over-sensitive to prose and blind to the actual
+  schema change. Worth revisiting when the console adopts `name_key`.
+
+**Verification:** core `345 passed` (baseline `319`, minus the deleted WP11
+known-limit pin, plus 27 new: 18 collation, 5 extractor, 4 migration); console
+`198 passed`, unchanged. The decision doc's §6.4 blast-radius prediction was
+re-measured against the real implementation rather than trusted: the finished
+`src/` over the **unmodified** test suite gives `313 passed, 6 failed` — the
+exact six tests §6.4 names. `PRAGMA user_version` = 3 confirmed on a fresh
+store, on the v2 fixture, and on the v1 fixture (which crosses both branches in
+a single open).
+
+---
+
 ## Open follow-ups (recorded, not yet packets)
 
 - **Entity case-collation policy** ([#14](https://github.com/Wuesteon/lean-memory/issues/14)) — WP11's pinned known limit ("acme" vs

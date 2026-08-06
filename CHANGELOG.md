@@ -4,6 +4,72 @@ All notable changes to lean-memory are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **One subject, one entity — entity names now resolve on a normalized key
+  (schema v3, WP15)** — `upsert_entity` used to match the raw surface form under
+  SQLite's BINARY collation, so `Acme` and `ACME` were two identities. Because
+  the whole spine is keyed on `(subject_id, predicate)`, the second one landed
+  in its own slot and *structurally* bypassed both the WP11 restatement skip and
+  contradiction resolution: two co-valid "current" answers for one real-world
+  subject, on the default surface, silently. Identity is now
+  `(namespace, name_key, type)`, where `name_key` is NFC + Unicode case-fold +
+  whitespace collapse — the same `normalize_text` DEDUP-EXACT has always used,
+  promoted to a shared `lean_memory.normalize` module so the tree carries one
+  definition instead of two that drift. A full Unicode fold, not SQLite
+  `NOCASE`: `Café`/`CAFÉ` and `ЖУК`/`жук` collate, which `NOCASE` (ASCII-only)
+  does not. Punctuation and diacritics are deliberately NOT folded — `Yahoo!` is
+  not `Yahoo`, `Café` is not `Cafe`. Closes
+  [#14](https://github.com/Wuesteon/lean-memory/issues/14).
+  - **Display is unchanged.** `entity.name` keeps the FIRST-seen surface form
+    verbatim; only the new key column is folded. Nothing user-visible is
+    lowercased, and sorting/FTS/vec0/every `subject_id`-keyed path is untouched.
+  - **Schema v3** — `user_version`-gated 2→3 migration (v1- and v2-format files
+    upgrade in place, both verified by checked-in fixtures) adding
+    `entity.name_key` (ALTER + Python backfill, because SQLite has no
+    `casefold()`) and the `ix_entity_key` index. ADD-only: no row is deleted, no
+    fact re-pointed, no validity interval moved — the as-of surface is identical
+    across the migration.
+  - **Pre-existing splits are not healed** (forward-fix only). After migration
+    `Acme` and `ACME` both carry `name_key='acme'` and keep their own facts; new
+    mentions resolve to the OLDEST row (`ORDER BY created_at, id LIMIT 1`), so a
+    store converges going forward with one legacy remnant. Healing means
+    re-pointing `fact.subject_id` — a new mutation verb and its own decision.
+  - **Downgrade is one-way**, same expectation as schema v2: a v3 file opened by
+    ≤0.2.4 code works (the extra column is ignored), but that older code writes
+    rows with an empty `name_key` which newer code then mis-resolves.
+  - **New known limit, pinned:** two genuinely distinct subjects in one
+    namespace whose names differ only by case now collate (`Mercury`/`mercury`).
+    On a functional predicate that retires the earlier fact from the current
+    surface. Nothing is deleted — it stays readable via
+    `search(as_of=…, is_latest_only=False)`. This replaces the opposite
+    known limit v0.2.2 pinned; the trade is deliberate, because a false *split*
+    is silent and permanent while a false *merge* is visible in the supersession
+    chain.
+
+### Fixed
+
+- **Lowercase first person no longer creates an entity named `i` (WP15)** — the
+  offline stub generator's `_FIRST_PERSON` regex was case-sensitive (unlike the
+  Phase-0 rules extractor's, which has carried `re.I` since the start), so
+  `"i work at acme."` missed it, fell through to the subject fallback, and got
+  its own entity. That is the other half of #14: the store-side key alone does
+  not close it, because the split is `user` vs `i`. Two disclosed consequences,
+  both now pinned by tests: `my`/`me`/`mine` were already lowercase in the
+  pattern, so `re.I` also re-attributes `ME`/`Mine`/a bare `i` before the
+  relation verb to the default subject; and offline routing shifts (lowercase-`i`
+  sentences become "trivially explicit" and route `direct` instead of
+  escalating), so any FUTURE offline escalation measurement moves. No published
+  calibration number changes — those were measured on the real GLiNER2 backbone,
+  not this stub.
+- **`StubTyper` docstring claimed a coreference behavior it never had** — it
+  said `subject_name` was matched case-insensitively against `known_entities`;
+  the stub never reads that argument. `OllamaTyper`'s known-entity
+  canonicalization, which does, now uses the shared entity key instead of a
+  local `.lower()` (which missed `ß`, `ﬁ`, and whitespace runs).
+
 ## [0.2.4] - 2026-08-06
 
 Patch release: the console's MCP tools get the same metadata treatment the

@@ -216,6 +216,8 @@ Each `mem.add()` call runs a 4-pass hybrid extraction pipeline:
 
 Contradiction detection runs cheap-first (slot match → cosine → token subsumption → LLM). Conflicting facts are superseded, not deleted — the old fact stays with `is_latest=False` and a `superseded_by` pointer.
 
+Entity identity resolves on a normalized name key — NFC + Unicode case-fold + whitespace collapse — so `Acme`, `ACME` and `acme` are one subject and dedupe/supersession actually apply to them. It is a full Unicode fold, not SQLite's ASCII-only `NOCASE`: `Café`/`CAFÉ` and `ЖУК`/`жук` collate too. Punctuation and diacritics are deliberately *not* folded (`Yahoo!` ≠ `Yahoo`, `Café` ≠ `Cafe`), and the display name keeps the first spelling you used. The trade-off: two genuinely distinct subjects differing only by case (`Mercury` the planet vs `mercury` the metal) collate into one — nothing is deleted, and the retired fact stays readable via `search(as_of=…, is_latest_only=False)`.
+
 Retrieval fuses two-stage Matryoshka dense search (256-dim coarse KNN → full-dim (1024 for the default embedder) re-score) with BM25 sparse, applies RRF fusion, reranks with a cross-encoder, and scores with salience-decay (`0.6·relevance + 0.2·recency + 0.2·importance`).
 
 ## Develop
