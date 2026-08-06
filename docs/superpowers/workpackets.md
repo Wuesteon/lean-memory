@@ -592,6 +592,34 @@ reusing the WP13 contract-test pattern nearly verbatim
 **Files:** `console/src/lean_memory_console/mcp_tools.py`, `observe_mcp.py`,
 `routes/mcp.py`, new console contract test. Lane D — no core files.
 
+**Recorded during implementation (deliberate divergences from core WP13):**
+
+- **`memory_search` is `readOnlyHint=False` on the console, `True` on core.**
+  MCP's `readOnlyHint` means "does not modify its ENVIRONMENT". The console
+  wrapper is an *observing* superset: `gateway.search()` unconditionally
+  appends a `'search'` row to `_events.db` (pruning past CAP=10 000) and
+  creates the namespace store file on first touch. Core's `memory_search` has
+  no event log, so `True` is truthful there. One standard is applied to every
+  console tool — no telemetry carve-out — which is why `memory_search` and
+  `memory_review_queue` (lazy proposal expiry) are both non-read-only.
+  `memory_maintenance_status` is the only genuinely read-only console tool.
+- **`memory_review_queue` carries `idempotentHint=True`** — the only write is
+  the lazy expiry of already-overdue proposals, so re-listing lands on the same
+  end state and a re-poll is safe. Core's `memory_review_queue` omits the hint
+  (spec default: false); worth aligning core in a later lane-A/C packet.
+- **`ge=1` on `k`/`limit` was deliberately NOT copied from core** (core
+  `mcp_server.py` added it in WP13). WP14 is metadata-only; a schema minimum
+  would start rejecting `k=0`, a real behavior change. The console's shared-tool
+  schemas therefore differ from core's in validation. Defer to a separate packet
+  if core/console schema parity is wanted.
+
+**Dual-major evidence:** console suite green on both SDK majors —
+`198 passed` on mcp 1.28.1 (`console/.venv`) and `198 passed` on a scratch venv
+pinned to `mcp==2.0.0`. `_tool_manager.list_tools()` plus `Tool.parameters` /
+`Tool.annotations` (the private FastMCP/MCPServer surface the contract test
+reaches into) are unchanged across 1.x → 2.0, so `_mcp_compat` needs no new
+accessor.
+
 ---
 
 ## Open follow-ups (recorded, not yet packets)

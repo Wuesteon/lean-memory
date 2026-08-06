@@ -56,13 +56,20 @@ def surfaces(tmp_path_factory):
     log.close()
 
 
-# What each console tool does to the world.
-#   memory_search is read-only w.r.t. MEMORY: it never adds, supersedes or deletes
-#     a fact (it does append one observability row to the console event log, which
-#     the description discloses).
-#   memory_review_queue is NOT read-only: listing lazily expires overdue proposals.
+# What each console tool does to the world. readOnlyHint is judged against the MCP
+# standard — "does not modify its ENVIRONMENT" — not against memory alone, and the
+# console applies that one standard to every tool (no telemetry carve-out):
+#   memory_search is NOT read-only. It never adds, supersedes or deletes a FACT, but
+#     the observing wrapper appends a 'search' row to the console event log and
+#     creates the namespace store file on first touch. Core's memory_search IS
+#     read-only — core has no event log — so this is a deliberate divergence.
+#     idempotentHint=False: each call appends another event row.
+#   memory_review_queue is NOT read-only either: listing lazily expires overdue
+#     proposals. It IS idempotent — re-listing lands on the same end state.
 #   memory_maintenance_run defaults to dry-run but apply=True writes, so it cannot
 #     claim read-only.
+#   memory_maintenance_status is the only genuinely read-only tool: a pure ledger
+#     read, no event row, no model build.
 #   Nothing is destructive: the spine is ADD-only (supersession keeps history) and
 #     the console deliberately ships no memory_clear.
 EXPECTED_HINTS = {
@@ -71,14 +78,22 @@ EXPECTED_HINTS = {
         "destructiveHint": False,
         "idempotentHint": False,
     },
-    "memory_search": {"readOnlyHint": True},
+    "memory_search": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+    },
     "memory_maintenance_run": {
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": False,
     },
     "memory_maintenance_status": {"readOnlyHint": True},
-    "memory_review_queue": {"readOnlyHint": False, "destructiveHint": False},
+    "memory_review_queue": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+    },
     "memory_review_decide": {
         "readOnlyHint": False,
         "destructiveHint": False,
@@ -166,12 +181,19 @@ def test_descriptions_disclose_side_effects(surfaces, surface):
     assert "extract" in add
     # ADD-only supersession, not overwrite — the other surprising bit.
     assert "supersed" in add
-    # search must say it never modifies stored memory...
-    assert "read-only" in search
+    # search must say stored FACTS are untouched...
+    assert "never adds, supersedes or deletes" in search
+    # ...but must NOT claim read-only: the annotation says False, so the prose has
+    # to agree (the observing wrapper writes an event row + the store file).
+    assert "not read-only" in search
     # ...and that the console records an observability event for every call.
     assert "event" in search and "event" in add
     # listing expires overdue proposals — the reason it is not read-only.
     assert "expire" in queue
+    # First call with the [models]/[extract] extras blocks on a model download —
+    # the single most surprising thing about calling these tools (core WP13 pins
+    # the same disclosure in tests/test_mcp_tool_metadata.py).
+    assert "download" in add or "download" in search
 
 
 def test_both_surfaces_expose_identical_metadata(surfaces):

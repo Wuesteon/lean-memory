@@ -4,8 +4,12 @@ The console ships the SAME memory + maintenance tools on both its stdio server
 (``observe_mcp.py`` — what the plugin runs) and its Docker HTTP mount
 (``routes/mcp.py``). Registering them once here, against a passed-in server + the
 gateway, keeps tool names, signatures, return shapes AND tool metadata IDENTICAL
-across the two — and identical to the core stdio server (``lean_memory.mcp_server``),
-which is the §6.3 requirement and the v0.1.3 manifest-parity lesson.
+across the console's TWO SURFACES. Names and return shapes also match the core
+stdio server (``lean_memory.mcp_server``) — the §6.3 requirement and the v0.1.3
+manifest-parity lesson — but the DESCRIPTIONS and annotations deliberately
+diverge from core's: this wrapper is an OBSERVING superset (every call writes a
+console event) with no deletion tool, so it says different true things. Nothing
+tests console-vs-core metadata, and nothing should.
 
 Metadata (WP14, the console half of core's WP13): every tool declares honest
 ``ToolAnnotations``, every schema parameter carries a description, and every
@@ -51,11 +55,6 @@ _NS = Annotated[
     ),
 ]
 
-# Annotation baseline for both surfaces: every tool works on local SQLite files
-# under the console's data root — a closed world, so openWorldHint=False
-# everywhere. Nothing here is destructive: the spine is ADD-only (supersession
-# retains history) and the console deliberately ships no memory_clear (§6).
-
 # The prompt text: the client agent runs THIS workflow. It MUST NOT decide any
 # proposal without an explicit user verdict, and batch verbs ("approve all exact
 # dedups") map only to explicit user statements (§6.4). Kept as a module constant so
@@ -98,11 +97,20 @@ def register_memory_tools(mcp: MCPServerType, gateway: EngineGateway) -> None:
     drift: the stdio wrapper (``observe_mcp.build_mcp``) and the Docker HTTP mount
     (``routes.mcp._build_http_mcp``) register exactly these definitions.
 
-    A deliberate superset of the core stdio server: memory_add gains source/t_ref and a
-    structured return; memory_clear is intentionally absent (no deletion surface, §6).
-    Parity is with the Memory API, not the core tool signatures.
+    How this surface differs from the core stdio server: see the ``observe_mcp``
+    module docstring (the one canonical statement of the superset).
     """
 
+    # Annotation baseline for both surfaces. openWorldHint=False everywhere: every
+    # tool works on local SQLite files under the console's data root — a closed
+    # world. destructiveHint=False everywhere: the spine is ADD-only (supersession
+    # retains history) and the console deliberately ships no memory_clear (§6).
+    # readOnlyHint is judged against the MCP standard — "does not modify its
+    # ENVIRONMENT" — not against memory alone, so the observing wrapper's event-log
+    # append counts as a write and memory_search is NOT read-only here (it is on
+    # core, which has no event log). No telemetry carve-out: memory_search and
+    # memory_review_queue are both marked non-read-only for the same class of lazy
+    # bookkeeping write.
     @mcp.tool(
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -159,7 +167,10 @@ def register_memory_tools(mcp: MCPServerType, gateway: EngineGateway) -> None:
         Use it after learning durable information worth recalling in later
         sessions (preferences, decisions, biographical facts) — not for transient
         chatter, and not to re-state what memory already holds (check first with
-        memory_search). This surface has no deletion tool by design.
+        memory_search). This surface has no deletion tool by design. With the
+        [models]/[extract] extras installed and LM_CONSOLE_MODELS=auto (the
+        default), the first call in a fresh environment downloads model weights
+        (one-time, can take minutes); the call blocks until done.
         """
         res = await gateway.add(namespace, text, source=source, t_ref=t_ref)
         return {
@@ -169,7 +180,13 @@ def register_memory_tools(mcp: MCPServerType, gateway: EngineGateway) -> None:
 
     @mcp.tool(
         annotations=ToolAnnotations(
-            readOnlyHint=True,  # never adds, supersedes or deletes a fact
+            # NOT read-only: the observing wrapper appends a 'search' row to the
+            # console event log (and creates the namespace file on first touch), so
+            # it modifies its environment even though it never touches a fact.
+            # Core's memory_search IS readOnlyHint=True — it has no event log.
+            readOnlyHint=False,
+            destructiveHint=False,  # nothing is erased; the log only grows
+            idempotentHint=False,  # each call appends another event row
             openWorldHint=False,
         )
     )
@@ -193,18 +210,21 @@ def register_memory_tools(mcp: MCPServerType, gateway: EngineGateway) -> None:
     ) -> dict[str, Any]:
         """Retrieve the facts most relevant to a query from a namespace's memory.
 
-        Read-only with respect to memory: it never adds, supersedes or deletes a
-        fact (searching a namespace that does not exist yet returns no hits,
-        though the empty store file is created as a side effect). Always
+        It never adds, supersedes or deletes a FACT — but it is NOT read-only:
+        being the console's observing wrapper, every call appends a 'search' event
+        (query, k, hits, timing) to the console event log, and searching a
+        namespace that does not exist yet creates its empty store file as a side
+        effect (and returns no hits). Stored memory itself is unchanged. Always
         latest-only — superseded facts are never returned (the latest_only flag is
         REST-only, §6). Returns up to k hits, each with its fact text and final
-        score, most relevant first. Being the console's observing wrapper, every
-        call also records a 'search' event (query, k, hits, timing) in the console
-        event log; stored memory itself is unchanged.
+        score, most relevant first.
 
         Use it before answering anything that may depend on prior context —
         preferences, past decisions, earlier sessions. Facts only exist here if
-        something wrote them via memory_add.
+        something wrote them via memory_add. With the [models] extra installed and
+        LM_CONSOLE_MODELS=auto (the default), the first call in a fresh
+        environment downloads model weights (one-time, can take minutes); the call
+        blocks until done.
         """
         res = await gateway.search(
             namespace, query, k=k, latest_only=True, origin="agent"
@@ -287,6 +307,9 @@ def register_maintenance_tools(mcp: MCPServerType, gateway: EngineGateway) -> No
         annotations=ToolAnnotations(
             readOnlyHint=False,  # listing lazily EXPIRES overdue proposals — a write
             destructiveHint=False,
+            # Expiry is idempotent: re-listing with the same args lands on the same
+            # end state, so a re-poll is safe (the hint defaults to False otherwise).
+            idempotentHint=True,
             openWorldHint=False,
         )
     )
