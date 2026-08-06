@@ -29,6 +29,12 @@ from .base import Store
 from .schema import SCHEMA_SQL
 
 
+# Current persisted-format version. Bump it together with a new
+# `if version < N:` branch in _init_schema — it is the outer guard that decides
+# whether an open needs the migration transaction at all.
+SCHEMA_VERSION = 3
+
+
 def _serialize(vec: np.ndarray) -> bytes:
     """L2-normalized float32 → vec0's float32 wire format.
 
@@ -114,60 +120,85 @@ class SqliteStore(Store):
         sql = SCHEMA_SQL.format(dim=self.dim, coarse_dim=self.coarse_dim)
         self._db.executescript(sql)
 
+        # ── Versioned migrations, all inside ONE explicit transaction.
+        #
         # Schema-version stamp — the migration anchor for future releases.
         # Version 1 == the 0.1.x layout; pre-stamp files (0.1.0–0.1.2, version 0)
         # have an identical spine and are treated as version 1. Never write over a
-        # NEWER release's stamp.
-        version = self._db.execute("PRAGMA user_version").fetchone()[0]
-        if version == 0:
-            version = 1
-            self._db.execute("PRAGMA user_version = 1")
+        # NEWER release's stamp. Each branch below runs the NON-idempotent DDL for
+        # its version exactly once, keyed off user_version. A fresh DB is version 1
+        # here (stamped just inside), so it flows through the SAME branches and
+        # gains record_kind AND name_key via the SAME ALTERs — there is no separate
+        # fresh path. ADD COLUMN is not idempotent (raises 'duplicate column name'
+        # on reopen), so it MUST live here and never in the always-run blob.
+        #
+        # The explicit BEGIN IMMEDIATE is load-bearing, not decoration. Python's
+        # sqlite3 opens an implicit transaction for DML only — NEVER for DDL — so
+        # without it an `ALTER TABLE ... ADD COLUMN` runs in autocommit and is
+        # durable the instant it executes, while the backfill / index / version
+        # stamp that make it coherent commit later. Interrupt that window and the
+        # file keeps the new column under the OLD user_version; every later open
+        # then re-enters the branch and dies on 'duplicate column name' —
+        # permanently unopenable, no recovery short of manual sqlite surgery.
+        # (SQLite's own DDL is transactional; it is Python's autocommit heuristic,
+        # not SQLite, that would strand the ALTER outside a transaction.)
+        # Re-reading user_version under the write lock closes the sibling race:
+        # two processes opening one pre-v3 file both read the old version, and
+        # without the re-read the loser repeats the ALTER. The outer guard keeps
+        # the common already-current open lock-free.
+        if self._db.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                version = self._db.execute("PRAGMA user_version").fetchone()[0]
+                if version == 0:
+                    version = 1
+                    self._db.execute("PRAGMA user_version = 1")
 
-        # ── Versioned migrations. Each branch runs the NON-idempotent DDL for its
-        # version exactly once, keyed off user_version. A fresh DB is version 1
-        # here (just stamped above), so it flows through the same `< 2` branch and
-        # gains record_kind via the SAME ALTER — there is no separate fresh path.
-        # ADD COLUMN is not idempotent (raises 'duplicate column name' on reopen),
-        # so it MUST live here and never in the always-run blob.
-        if version < 2:
-            self._db.execute(
-                "ALTER TABLE fact ADD COLUMN record_kind TEXT NOT NULL "
-                "DEFAULT 'fact'"  # 'fact'|'summary'
-            )
-            self._db.execute("PRAGMA user_version = 2")
-            version = 2
+                if version < 2:
+                    self._db.execute(
+                        "ALTER TABLE fact ADD COLUMN record_kind TEXT NOT NULL "
+                        "DEFAULT 'fact'"  # 'fact'|'summary'
+                    )
+                    self._db.execute("PRAGMA user_version = 2")
+                    version = 2
 
-        # v3 — entity name collation (WP15). ADD-only and forward-fix: the
-        # backfill writes the derived key onto existing rows and touches nothing
-        # else. No row is deleted, no fact is re-pointed, no validity interval
-        # moves, so the as-of surface is byte-identical across the migration.
-        # Pre-existing case-split rows ('Acme' + 'ACME') are NOT healed — both
-        # keep their facts; upsert_entity's tie-break just converges new mentions
-        # on the oldest. (Healing means re-pointing fact.subject_id, a new
-        # mutation verb and its own decision — deferred to a possible
-        # merge_entity review proposal.)
-        # The backfill is a Python loop by necessity: SQLite has no casefold();
-        # `lower()` is ASCII-only and would silently mis-key every non-ASCII name.
-        # The table holds one row per distinct subject, and this runs inside the
-        # single _init_schema transaction. The CREATE INDEX belongs here, NOT in
-        # SCHEMA_SQL, for the same reason as the ALTER (see schema.py).
-        if version < 3:
-            self._db.execute(
-                "ALTER TABLE entity ADD COLUMN name_key TEXT NOT NULL DEFAULT ''"
-            )
-            for row in self._db.execute("SELECT id, name FROM entity").fetchall():
-                self._db.execute(
-                    "UPDATE entity SET name_key=? WHERE id=?",
-                    (entity_key(row["name"]), row["id"]),
-                )
-            self._db.execute(
-                "CREATE INDEX IF NOT EXISTS ix_entity_key "
-                "ON entity(namespace, name_key, type)"
-            )
-            self._db.execute("PRAGMA user_version = 3")
-            version = 3
-
-        self._db.commit()
+                # v3 — entity name collation (WP15). ADD-only and forward-fix: the
+                # backfill writes the derived key onto existing rows and touches
+                # nothing else. No row is deleted, no fact is re-pointed, no
+                # validity interval moves, so the as-of surface is byte-identical
+                # across the migration. Pre-existing case-split rows ('Acme' +
+                # 'ACME') are NOT healed — both keep their facts; upsert_entity's
+                # tie-break just converges new mentions on the oldest. (Healing
+                # means re-pointing fact.subject_id, a new mutation verb and its
+                # own decision — deferred to a possible merge_entity review
+                # proposal.)
+                # The backfill is a Python loop by necessity: SQLite has no
+                # casefold(); `lower()` is ASCII-only and would silently mis-key
+                # every non-ASCII name. The table holds one row per distinct
+                # subject. The CREATE INDEX belongs here, NOT in SCHEMA_SQL, for
+                # the same reason as the ALTER (see schema.py).
+                if version < 3:
+                    self._db.execute(
+                        "ALTER TABLE entity ADD COLUMN name_key TEXT NOT NULL "
+                        "DEFAULT ''"
+                    )
+                    for row in self._db.execute(
+                        "SELECT id, name FROM entity"
+                    ).fetchall():
+                        self._db.execute(
+                            "UPDATE entity SET name_key=? WHERE id=?",
+                            (entity_key(row["name"]), row["id"]),
+                        )
+                    self._db.execute(
+                        "CREATE INDEX IF NOT EXISTS ix_entity_key "
+                        "ON entity(namespace, name_key, type)"
+                    )
+                    self._db.execute("PRAGMA user_version = 3")
+                    version = 3
+            except BaseException:
+                self._db.rollback()
+                raise
+            self._db.commit()
 
     def _check_existing_dims(self) -> None:
         """Refuse to open a store whose vec0 table was created for a different embedder.

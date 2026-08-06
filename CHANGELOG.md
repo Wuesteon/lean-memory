@@ -31,7 +31,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `entity.name_key` (ALTER + Python backfill, because SQLite has no
     `casefold()`) and the `ix_entity_key` index. ADD-only: no row is deleted, no
     fact re-pointed, no validity interval moved — the as-of surface is identical
-    across the migration.
+    across the migration. The upgrade runs in ONE transaction, so an interrupted
+    one (crash, kill, full disk) rolls back whole and the next open retries it —
+    it cannot leave the file half-migrated and unopenable.
   - **Pre-existing splits are not healed** (forward-fix only). After migration
     `Acme` and `ACME` both carry `name_key='acme'` and keep their own facts; new
     mentions resolve to the OLDEST row (`ORDER BY created_at, id LIMIT 1`), so a

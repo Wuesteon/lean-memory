@@ -38,6 +38,7 @@ import numpy as np
 import pytest
 
 from lean_memory.normalize import normalize_text
+from lean_memory.store import sqlite_store
 from lean_memory.store.sqlite_store import SqliteStore
 from lean_memory.types import Entity, Episode, Fact
 
@@ -242,6 +243,46 @@ def test_v2_reopens_cleanly_after_migration(v2_db):
         reopened.close()
 
 
+def test_interrupted_migration_rolls_back_whole(v2_db, monkeypatch):
+    """ATOMICITY: the ALTER must live INSIDE the migration transaction.
+
+    Python's sqlite3 opens an implicit transaction for DML only — never for DDL —
+    so without the explicit BEGIN IMMEDIATE the `ALTER TABLE entity ADD COLUMN
+    name_key` autocommits and is durable the instant it runs, while the backfill,
+    the index and the version stamp commit later. Fail in that window and the
+    file keeps `name_key` under `user_version = 2`; EVERY later open then
+    re-enters the `< 3` branch and raises 'duplicate column name: name_key' —
+    permanently unopenable, no recovery short of manual sqlite surgery.
+
+    Here the backfill blows up mid-migration. The file must roll back whole (v2,
+    no column) and migrate cleanly on the next open. Regression pin: reverting to
+    an implicit transaction reddens this immediately.
+    """
+    def explode(_name: str) -> str:
+        raise RuntimeError("backfill exploded")
+
+    monkeypatch.setattr(sqlite_store, "entity_key", explode)
+    with pytest.raises(RuntimeError, match="backfill exploded"):
+        SqliteStore(v2_db, dim=FIXTURE_DIM, coarse_dim=FIXTURE_COARSE_DIM)
+
+    raw = sqlite3.connect(v2_db)
+    try:
+        assert raw.execute("PRAGMA user_version").fetchone()[0] == 2, "stamp untouched"
+        cols = [r[1] for r in raw.execute("PRAGMA table_info(entity)").fetchall()]
+        assert "name_key" not in cols, "the ALTER rolled back with the transaction"
+    finally:
+        raw.close()
+
+    monkeypatch.undo()
+    store = SqliteStore(v2_db, dim=FIXTURE_DIM, coarse_dim=FIXTURE_COARSE_DIM)
+    try:
+        assert _user_version(store) == 3, "the retry migrates cleanly"
+        rows = store._db.execute("SELECT name, name_key FROM entity").fetchall()
+        assert rows and all(r["name_key"] == normalize_text(r["name"]) for r in rows)
+    finally:
+        store.close()
+
+
 def test_v2_case_split_entities_are_not_healed(v2_db):
     """Forward-fix only: the migration BACKFILLS, it never re-points a fact. A
     pre-existing 'Acme'/'ACME' split keeps both rows and both facts (healing
@@ -291,6 +332,17 @@ def test_fresh_create_stamps_current_version_and_reopens_clean(tmp_path):
     assert "record_kind" in cols
     ent_cols = [r[1] for r in store._db.execute("PRAGMA table_info(entity)").fetchall()]
     assert "name_key" in ent_cols
+    # ...and the index over it — the other half of the v3 branch, and the reason
+    # upsert_entity is a lookup rather than a scan. Pinned on the FRESH path too
+    # (not only the migrated one), so moving it behind a migration-only condition
+    # cannot silently leave every new store scanning.
+    indexes = {
+        r[0]
+        for r in store._db.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+    }
+    assert "ix_entity_key" in indexes
     store.close()
 
     reopened = SqliteStore(path, dim=768)  # must not raise

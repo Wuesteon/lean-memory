@@ -46,7 +46,7 @@ on the same files).
 | WP12 mcp 2.0 migration | `worktree-wp12-mcp2-migration` | A | — | none — dependency-driven | **MERGED** (2026-07-29: PR #10 → main 4efe4ca; dual-path compat, pin widened to mcp>=1.2,<3; fixed the 2.0 worker-thread SQLite crash (check_same_thread=False, serialized); all four suite combos green locally, CI green on fresh-resolved 2.0; shipped in v0.2.3 (2026-07-29); lane A released) |
 | WP11 Write-time restatement dedupe | `worktree-wp11-restatement-dedup` | A | — | — | **MERGED** (2026-07-29: PR #7 → main 52d21fd; core 289 + console 153 green on merged branch; rode along: mcp>=1.2,<2 pin for the mcp 2.0.0 fastmcp removal, gated WP9 LLM-judge design doc; lane A released) |
 | WP14 Console tool metadata | `wp14-console-tool-metadata` | D | — | precondition: console listed on Glama? | **MERGED** (2026-08-06: PR #19 → main 9586b59, closes [#13](https://github.com/Wuesteon/lean-memory/issues/13); honest annotations + 100% param descriptions + when-to-use guidance on all 6 console tools, both surfaces — shared registration makes stdio/HTTP parity structural; contract pinned in `console/tests/test_mcp_tool_metadata.py` (45 tests, wire-name asserts); console 198 green on mcp 1.28.1 AND 2.0.0 scratch venv, live stdio wire check on both majors; core untouched (319); CI 6/6; precondition answered NO — console not independently listed on Glama (listings are repo-keyed), done as hygiene/parity; deliberate core divergences recorded in the section; unreleased — ships with the next tag; lane D released) |
-| WP15 Entity name collation (`name_key`) | `wp15-entity-collation` | A | — (design done) | maintainer decision on the 2026-08-06 decision doc + six-week read (lane A); sequence **before WP4** | open (decision doc: `docs/superpowers/specs/2026-08-06-entity-case-collation-decision.md`; [#14](https://github.com/Wuesteon/lean-memory/issues/14)) |
+| WP15 Entity name collation (`name_key`) | `wp15-entity-collation` | A | — (design done) | gate **WAIVED by the maintainer 2026-08-07** (recommendation approved same day); sequenced **before WP4** | **SHIPPED on branch** (2026-08-07: option (c) of `docs/superpowers/specs/2026-08-06-entity-case-collation-decision.md` — `entity.name_key` + schema v3 migration + shared `lean_memory/normalize.py`; core 346 + console 198 green; closes [#14](https://github.com/Wuesteon/lean-memory/issues/14) and supersedes WP11's case-split known limit; see §WP15 — not yet merged/released) |
 | WP13 MCP tool metadata (Glama audit) | `worktree-wp12-mcp-tool-metadata` | A | — | — | **MERGED** (2026-07-29: PR #11 → main 342461e; branch name predates the renumber — claimed as WP12 concurrently with the mcp 2.0 migration; annotations + param descriptions + usage guidance on all 7 server tools, no behavior change beyond k/limit schema minimums; contract pinned in `tests/test_mcp_tool_metadata.py`, green on both mcp majors (core 319 on 1.28.0, 318+1 skip on 2.0.0 scratch venv), console 153, CI 6/6; shipped in v0.2.3 (2026-07-29) — Glama re-scan triggered; lane A released) |
 
 Lanes: **A** = engine/API surface (`src/lean_memory/` hot zone — strictly
@@ -533,13 +533,18 @@ new engine surface.
 offline `dedup_near` band; re-assertion bookkeeping (seen-counts,
 last-asserted timestamps) — design it in WP4+ if the demand read asks for it.
 
-**Known limit (pinned by test):** a case variant of the ENTITY surface form
-("acme" vs "Acme") resolves to a different entity (`upsert_entity` matches
-`name=?` under BINARY collation) → different slot → bypasses dedupe AND
-contradiction resolution entirely. An entity-resolution collation policy is
-its own decision (real distinct-by-case counterexamples: "Polish"/"polish");
-pinned in `tests/test_restatement_dedupe.py::
-test_entity_case_variant_splits_the_slot_known_limit`.
+**Known limit — SUPERSEDED by WP15 (2026-08-07).** As shipped, a case variant of
+the ENTITY surface form ("acme" vs "Acme") resolved to a different entity
+(`upsert_entity` matched `name=?` under BINARY collation) → different slot →
+bypassed dedupe AND contradiction resolution entirely, and that was pinned in
+`tests/test_restatement_dedupe.py::test_entity_case_variant_splits_the_slot_known_limit`.
+WP15 took the collation decision (real distinct-by-case counterexamples:
+"Polish"/"polish") and closed it: identity now resolves on `entity.name_key`, so
+variants share one slot and the WP11 skip applies to them. That test is deleted;
+the replacement known limit — genuinely case-distinct subjects now MERGE, and
+why that is the accepted trade (recoverable via supersession) — is pinned in
+`tests/test_entity_collation.py::test_case_distinct_subjects_merge_known_limit`.
+See §WP15.
 
 ---
 
@@ -659,8 +664,8 @@ resolution, alias/semantic linking, the `_CAP_RUN` lowercase-proper-noun
 misextraction, console `name_key` adoption (separate package/release).
 
 **Files:** `src/lean_memory/normalize.py` (new), `store/base.py` (contract
-docstring), `store/schema.py` (comment only — no DDL change),
-`store/sqlite_store.py`, `maintain/transforms.py` (re-export),
+docstring), `types.py` (Entity docstring), `store/schema.py` (comments only — no
+DDL change), `store/sqlite_store.py`, `maintain/transforms.py` (re-export),
 `extract/gliner_extractor.py`, `extract/llm_typer.py`,
 `tests/test_entity_collation.py` (new), `tests/fixtures/make_v2_fixture.py` +
 `v2_format.db` (new), `tests/test_schema_migration.py`,
@@ -693,6 +698,25 @@ docstring), `store/schema.py` (comment only — no DDL change),
   fact is still returned by `search(as_of=…, is_latest_only=False)` — so the
   doc's "a false merge is recoverable" argument is executable rather than
   rhetorical.
+- **The versioned migrations now run inside an explicit `BEGIN IMMEDIATE`**
+  (review carry-in, 2026-08-07). Python's `sqlite3` opens an implicit
+  transaction for DML only, never for DDL, so the v3 `ALTER TABLE ... ADD COLUMN
+  name_key` was autocommitted and durable *before* the backfill / index / stamp
+  it depends on. A/B-verified by SIGKILLing between the ALTER and the commit:
+  pre-fix the file kept `name_key` under `user_version = 2` and **every** later
+  open raised `duplicate column name: name_key` — permanently unopenable;
+  post-fix the ALTER rolls back and the next open migrates cleanly. The same
+  probe run concurrently (two processes first-opening one v2 file) failed the
+  same way pre-fix and passes post-fix, because the version is re-read *under*
+  the write lock. The outer `< SCHEMA_VERSION` guard keeps the common
+  already-current open lock-free. The v2 branch inherited the same latent hazard
+  in a two-statement window and is now covered too.
+- **`ix_entity_lookup(namespace, name, type)` is retained but vestigial** and
+  now says so in `schema.py`. No engine read keys on `entity.name` after v3, so
+  it is pure write cost; retiring it needs a `DROP INDEX` in the versioned
+  branch *and* an edit to a `create`-bearing line, which flips the console's
+  engine-schema tripwire — a cross-package call, deliberately not slipped in
+  here. Revisit with the console's `name_key` adoption.
 - **`schema.py`'s comment avoids DDL keywords.** The console's engine-schema
   tripwire (`inspect_sql.compute_engine_schema_fingerprint`) digests every line
   of `store/schema.py` containing `create`, case-insensitively — comments
@@ -704,9 +728,13 @@ docstring), `store/schema.py` (comment only — no DDL change),
   tripwire is simultaneously over-sensitive to prose and blind to the actual
   schema change. Worth revisiting when the console adopts `name_key`.
 
-**Verification:** core `345 passed` (baseline `319`, minus the deleted WP11
-known-limit pin, plus 27 new: 18 collation, 5 extractor, 4 migration); console
-`198 passed`, unchanged. The decision doc's §6.4 blast-radius prediction was
+**Verification:** core `346 passed` (baseline `319`, minus the deleted WP11
+known-limit pin, plus 28 new: 18 collation, 5 extractor, 5 migration — the last
+of those being the review carry-in's atomicity pin,
+`test_interrupted_migration_rolls_back_whole`, confirmed to redden against the
+pre-fix `sqlite_store.py`); console `198 passed`, unchanged — the engine-schema
+tripwire hash was re-measured byte-identical after each `schema.py` comment edit,
+not assumed. The decision doc's §6.4 blast-radius prediction was
 re-measured against the real implementation rather than trusted: the finished
 `src/` over the **unmodified** test suite gives `313 passed, 6 failed` — the
 exact six tests §6.4 names. `PRAGMA user_version` = 3 confirmed on a fresh
@@ -717,15 +745,19 @@ a single open).
 
 ## Open follow-ups (recorded, not yet packets)
 
-- **Entity case-collation policy** ([#14](https://github.com/Wuesteon/lean-memory/issues/14)) — WP11's pinned known limit ("acme" vs
-  "Acme" split the slot and bypass dedupe + contradiction resolution; see the
-  WP11 section). Needs a decision, not just code: case-insensitive lookup has
-  real counterexamples ("Polish"/"polish"). **Decision doc recorded
-  2026-08-06** (`docs/superpowers/specs/2026-08-06-entity-case-collation-decision.md`,
-  adversarially reviewed rev 2): recommends a stored `entity.name_key`
-  casefold column + `re.I` on the extractor's first-person regex (the headline
-  example is two independent defects), packaged as WP15 sequenced before WP4.
-  Awaiting maintainer decision; #14 stays open until WP15 lands.
+- ~~**Entity case-collation policy** ([#14](https://github.com/Wuesteon/lean-memory/issues/14))~~ — **RESOLVED by WP15
+  (2026-08-07)**, no longer an open follow-up. WP11's pinned known limit ("acme"
+  vs "Acme" split the slot and bypass dedupe + contradiction resolution) needed
+  a decision, not just code, because case-insensitive lookup has real
+  counterexamples ("Polish"/"polish"). Decision doc recorded 2026-08-06
+  (`docs/superpowers/specs/2026-08-06-entity-case-collation-decision.md`,
+  adversarially reviewed rev 2); the maintainer approved its recommendation and
+  waived the six-week gate on 2026-08-07. Shipped as WP15: stored
+  `entity.name_key` casefold column + `re.I` on the extractor's first-person
+  regex (the headline example was two independent defects). #14 closes when the
+  branch merges; the *new* known limit (case-distinct subjects merge) is
+  recorded in §WP15, not here — it is an accepted, pinned trade, not an open
+  question.
 - **WP2 mem0 comparison arm** ([#15](https://github.com/Wuesteon/lean-memory/issues/15)) — designed as Task 5 of the WP2 plan
   (`--arm mem0`, version-pinned output, exit-2 on missing install); needs the
   user's go-ahead plus a configured mem0 LLM path (Ollama or API key) to run.
