@@ -4,6 +4,29 @@ All notable changes to lean-memory are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-08-06
+
+Patch release: the console's MCP tools get the same metadata treatment the
+core server got in v0.2.3 (WP14).
+
+### Added
+
+- **Console MCP tool metadata (WP14)** — all six console wrapper tools (the
+  stdio `observe_mcp` server and the HTTP mount) now ship `ToolAnnotations`
+  (`readOnlyHint`/`destructiveHint`/`idempotentHint`, `openWorldHint=False`),
+  a description for every inputSchema parameter, and when-to-use guidance
+  with sibling cross-references and side-effect disclosure. `memory_add` and
+  `memory_search` now register from a shared module, so the two surfaces
+  cannot drift apart. Tool names, parameters, and call behavior are
+  unchanged. Contract pinned in `console/tests/test_mcp_tool_metadata.py`
+  (green on both mcp majors). Two deliberate divergences from core, both
+  truthful to console semantics: `memory_search` declares
+  `readOnlyHint=False` (every call appends a row to the console event log
+  and creates the namespace store file on first touch — clients that
+  auto-approve on the hint will now prompt), and `memory_review_queue`
+  declares `idempotentHint=True` (its only write, lazy proposal expiry,
+  lands on the same end state on re-poll).
+
 ## [0.2.3] - 2026-07-29
 
 Compatibility + polish release: mcp SDK 2.0 support (dual-path, pin widened
