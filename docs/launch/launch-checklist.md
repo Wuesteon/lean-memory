@@ -17,7 +17,7 @@ quickstart; ~2 GB model download stated wherever an install is shown.
 |---|---|---|---|---|
 | 1 | MCP Registry | **LIVE** (0.2.1 active, `isLatest`; `server.json` install spec verified end-to-end) | — (0.2.1 republished 2026-07-21; the tag-time run hit the PyPI-propagation race, `workflow_dispatch` re-run succeeded) | CI |
 | 2 | PyPI (core + console) | **LIVE** (0.2.1 both) — console page now renders full description/license/keywords/URLs (was blank at 0.2.0) | — (published via Trusted Publishing on the `v0.2.1` tag, 2026-07-21) | CI |
-| 3 | `awesome-mcp-servers` PR | **SUBMITTED** — [PR #9890](https://github.com/punkpeye/awesome-mcp-servers/pull/9890) open since 2026-07-12 (🤖🤖🤖 fast-track; Glama quality score live at 83%; maintainer's badge request answered 2026-07-13) | Waiting on maintainer; optional entry-text refresh (see below) | — |
+| 3 | `awesome-mcp-servers` PR | **MERGED 2026-07-22** — [PR #9890](https://github.com/punkpeye/awesome-mcp-servers/pull/9890) (submitted 2026-07-12; merged 2026-07-22T14:02Z — verified via gh 2026-08-06; the entry is live). Demand-read segmentation: this channel went live one week BEFORE the 2026-07-29 window start, so it needs no segmentation split. Note: the 2026-07-22 star/fork burst on the repo (44 stars/41 forks, synthetic accounts) PRECEDED the merge by ~4h — unrelated, and excluded from the demand read. | — | — |
 | 4 | Claude Code plugin marketplace | manifest valid + discovery metadata on `main` | Submit form (steps below) — not yet submitted | maintainer (account-bound form) |
 | 5 | Show HN | copy final (`launch-copy.md` §1) | Post from own account | maintainer |
 | 6 | r/ClaudeAI + r/LocalLLaMA | copy final (`launch-copy.md` §2–3) | Post from own account | maintainer |
@@ -30,12 +30,11 @@ quickstart; ~2 GB model download stated wherever an install is shown.
    to PyPI (console page verified rendering); `publish-mcp` re-dispatched
    after the PyPI-propagation race → registry shows 0.2.1 `isLatest`; GitHub
    release created.
-3. `awesome-mcp-servers`: **already submitted** (PR #9890, in review — the
-   maintainer asked for the Glama score, which is now live; last reply
-   2026-07-13). Optional: push the updated §4 entry line (adds sleep-time
-   maintenance + “No Docker”, lighter `[mcp]` install hint) to the fork branch
-   `Wuesteon/awesome-mcp-servers:add-lean-memory` to refresh the open PR —
-   or leave the in-review entry untouched.
+3. `awesome-mcp-servers`: **[DONE — MERGED 2026-07-22]** (PR #9890; found
+   merged during the 2026-08-06 issue sweep — the "in review" status here was
+   stale). The optional §4 entry-text refresh (sleep-time maintenance + "No
+   Docker", lighter `[mcp]` install hint) would now be a NEW PR against the
+   merged entry, not a fork-branch refresh — still optional.
 4. Submit the plugin: `claude plugin validate .` (passes as of this branch),
    then the Console form at <https://platform.claude.com/plugins/submit>
    pointed at `github.com/Wuesteon/lean-memory`. Notes: Anthropic’s community

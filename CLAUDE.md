@@ -47,15 +47,19 @@ WP11 write-time restatement dedupe; **v0.2.3** (2026-07-29, patch — the
 current release) adds dual-path mcp 1.x/2.x support (pin `>=1.2,<3`,
 WP12), fixes the 2.0 worker-thread SQLite crash, and ships the WP13 tool
 metadata (Glama re-scan) and WP2 update-integrity benchmark. **Channel-posts decision (user,
-2026-07-29): the remaining posts are OPTIONAL, not launch-required** —
-`awesome-mcp-servers` PR #9890 (in review since 2026-07-12), the Claude Code
-plugin marketplace form (platform.claude.com/plugins/submit), and the
-Show HN / r/ClaudeAI / r/LocalLLaMA posts may go out whenever (or never);
+2026-07-29): the remaining posts are OPTIONAL, not launch-required** — the
+Claude Code plugin marketplace form (platform.claude.com/plugins/submit) and
+the Show HN / r/ClaudeAI / r/LocalLLaMA posts may go out whenever (or never);
 final copy stays ready in `docs/launch/launch-copy.md`, runbook in
-`docs/launch/launch-checklist.md`. The **six-week demand read (spec §4) runs
-on the already-live channels (MCP Registry + PyPI), window start 2026-07-29
-(v0.2.2)**; if posts do go out later, note the date so the read can be
-segmented.
+`docs/launch/launch-checklist.md`. **`awesome-mcp-servers` PR #9890 MERGED
+2026-07-22** (found 2026-08-06 — earlier "in review" framing was stale), so
+that channel has been live since one week before window start. The **six-week
+demand read (spec §4) runs on the live channels (MCP Registry + PyPI +
+awesome-mcp-servers), window start 2026-07-29 (v0.2.2)**; if further posts go
+out later, note the date so the read can be segmented. Demand-read caveat
+(2026-08-06): the repo's 47 stars / 44 forks are a synthetic bot burst on
+2026-07-22 (Faker-style accounts, all created 2026-06-27) — exclude from the
+read; organic GitHub social signal is ~3 stars.
 
 Historical context (dated, do not re-derive): `docs/phase2-learnings.md`
 (assumptions vs. reality postmortem) and `docs/superpowers/phase2-HANDOFF.md`

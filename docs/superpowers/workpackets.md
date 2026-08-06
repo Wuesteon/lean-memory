@@ -35,7 +35,7 @@ on the same files).
 | WP2 Update-integrity bench | `worktree-wp2-update-integrity` | B | — | none — start anytime | **MERGED** (2026-07-29: PR #9 → main c803e54; 10 scenarios, 26/26 assertions PASS; core 301 + console 153 green; results appendix in `docs/competitive-landscape.md`; optional mem0 arm designed in the plan, not run; lane B released) |
 | WP3 Phase 2 runs + publication | `wp3-phase2-benchmarks` | B | WP0 | six-week read (spec §4) or "silence → retry lever" | open |
 | WP4 Read-surface API | `wp4-read-api` | A | WP0 | six-week read ("no new engine work between launch and the read") | open |
-| WP5 Deletion & GDPR (design → impl) | `wp5-deletion` | A | design: none; impl: WP4 | design anytime; impl six-week read | open (design: [#17](https://github.com/Wuesteon/lean-memory/issues/17)) |
+| WP5 Deletion & GDPR (design → impl) | `wp5-deletion` | A | design: none; impl: WP4 | design anytime; impl six-week read | design **DONE 2026-08-06** (spec: `docs/superpowers/specs/2026-08-06-wp5-deletion-gdpr-design.md`, adversarially reviewed rev 2, all claims measured against v0.2.3; closes [#17](https://github.com/Wuesteon/lean-memory/issues/17); maintainer sign-off items in spec §14); impl still gated |
 | WP6 Scoping & filters | `wp6-scoping-filters` | A | WP4, WP5 | six-week read | open |
 | WP7 Async API | `wp7-async` | A | WP4–WP6 | six-week read | open |
 | WP8 Integrations & distribution wave | `wp8-*` (per sub-packet) | C | WP0 | six-week read (spec §5) | open |
@@ -45,7 +45,8 @@ on the same files).
 | Memory UI | `worktree-memory-ui` | D | — | — | **MERGED** (2026-07-14: PR #2 → main 9d840b6; console 125 + core 141 green on merged main; lane D released) |
 | WP12 mcp 2.0 migration | `worktree-wp12-mcp2-migration` | A | — | none — dependency-driven | **MERGED** (2026-07-29: PR #10 → main 4efe4ca; dual-path compat, pin widened to mcp>=1.2,<3; fixed the 2.0 worker-thread SQLite crash (check_same_thread=False, serialized); all four suite combos green locally, CI green on fresh-resolved 2.0; shipped in v0.2.3 (2026-07-29); lane A released) |
 | WP11 Write-time restatement dedupe | `worktree-wp11-restatement-dedup` | A | — | — | **MERGED** (2026-07-29: PR #7 → main 52d21fd; core 289 + console 153 green on merged branch; rode along: mcp>=1.2,<2 pin for the mcp 2.0.0 fastmcp removal, gated WP9 LLM-judge design doc; lane A released) |
-| WP14 Console tool metadata | `wp14-console-tool-metadata` | D | — | precondition: console listed on Glama? | open ([#13](https://github.com/Wuesteon/lean-memory/issues/13)) |
+| WP14 Console tool metadata | `wp14-console-tool-metadata` | D | — | precondition: console listed on Glama? | **CLAIMED 2026-08-06** (`wp14-console-tool-metadata`; [#13](https://github.com/Wuesteon/lean-memory/issues/13)) |
+| WP15 Entity name collation (`name_key`) | `wp15-entity-collation` | A | — (design done) | maintainer decision on the 2026-08-06 decision doc + six-week read (lane A); sequence **before WP4** | open (decision doc: `docs/superpowers/specs/2026-08-06-entity-case-collation-decision.md`; [#14](https://github.com/Wuesteon/lean-memory/issues/14)) |
 | WP13 MCP tool metadata (Glama audit) | `worktree-wp12-mcp-tool-metadata` | A | — | — | **MERGED** (2026-07-29: PR #11 → main 342461e; branch name predates the renumber — claimed as WP12 concurrently with the mcp 2.0 migration; annotations + param descriptions + usage guidance on all 7 server tools, no behavior change beyond k/limit schema minimums; contract pinned in `tests/test_mcp_tool_metadata.py`, green on both mcp majors (core 319 on 1.28.0, 318+1 skip on 2.0.0 scratch venv), console 153, CI 6/6; shipped in v0.2.3 (2026-07-29) — Glama re-scan triggered; lane A released) |
 
 Lanes: **A** = engine/API surface (`src/lean_memory/` hot zone — strictly
@@ -560,6 +561,14 @@ guard test.
 frameworks flooring at 2.x, or the 1.x branch stopping security fixes. Until
 then both paths stay tested (dev venvs on 1.x, CI fresh-resolve on 2.x).
 
+**Signal checked 2026-08-06: NOT fired.** Every major consumer still caps at
+`<2` (fastmcp-slim 3.4.6 `mcp<2.0,>=1.24.0`; langchain-mcp-adapters 0.3.2 —
+released that same day — `mcp<2.0.0,>=1.24.0`; openai-agents 0.19.4 `mcp<2`;
+llama-index-tools-mcp 0.4.8 `mcp<2`), 1.29.0 shipped the same day as 2.0.0,
+and upstream's migration page explicitly advises library maintainers to keep
+an upper bound `<2`. No 1.x EOL announced. Re-check ~monthly; earliest
+plausible flip is a fastmcp 4.x.
+
 ---
 
 ## WP13 — MCP tool metadata (Glama audit)
@@ -599,8 +608,12 @@ reusing the WP13 contract-test pattern nearly verbatim
 - **Entity case-collation policy** ([#14](https://github.com/Wuesteon/lean-memory/issues/14)) — WP11's pinned known limit ("acme" vs
   "Acme" split the slot and bypass dedupe + contradiction resolution; see the
   WP11 section). Needs a decision, not just code: case-insensitive lookup has
-  real counterexamples ("Polish"/"polish"). Natural home: WP4+ entity
-  surface work, or its own small lane-A packet.
+  real counterexamples ("Polish"/"polish"). **Decision doc recorded
+  2026-08-06** (`docs/superpowers/specs/2026-08-06-entity-case-collation-decision.md`,
+  adversarially reviewed rev 2): recommends a stored `entity.name_key`
+  casefold column + `re.I` on the extractor's first-person regex (the headline
+  example is two independent defects), packaged as WP15 sequenced before WP4.
+  Awaiting maintainer decision; #14 stays open until WP15 lands.
 - **WP2 mem0 comparison arm** ([#15](https://github.com/Wuesteon/lean-memory/issues/15)) — designed as Task 5 of the WP2 plan
   (`--arm mem0`, version-pinned output, exit-2 on missing install); needs the
   user's go-ahead plus a configured mem0 LLM path (Ollama or API key) to run.
