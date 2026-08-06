@@ -54,7 +54,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from .._mcp_compat import MCPServerType, make_http_server_and_app
 from ..config import ConsoleConfig
 from ..engine import EngineGateway
-from ..mcp_tools import register_maintenance_tools
+from ..mcp_tools import register_maintenance_tools, register_memory_tools
 
 # Loopback host/origin default allow-list for the inner MCP transport-security
 # check. Host entries use the SDK's exact + ``base:*`` port-wildcard matching;
@@ -99,37 +99,12 @@ def _build_http_mcp(
         ),
     )
 
-    @mcp.tool()
-    async def memory_add(
-        namespace: str,
-        text: str,
-        source: str = "user",
-        t_ref: int | None = None,
-    ) -> dict[str, Any]:
-        """Ingest text into the namespace's memory (HTTP wrapper)."""
-        res = await gateway.add(namespace, text, source=source, t_ref=t_ref)
-        return {
-            "fact_ids": res.fact_ids,
-            "superseded_count": res.superseded_count,
-        }
-
-    @mcp.tool()
-    async def memory_search(
-        namespace: str, query: str, k: int = 5
-    ) -> dict[str, Any]:
-        """Search a namespace's memory (HTTP wrapper); always latest-only."""
-        res = await gateway.search(
-            namespace, query, k=k, latest_only=True, origin="agent"
-        )
-        return {
-            "hits": [
-                {"fact_text": h["fact_text"], "final_score": h["final_score"]}
-                for h in res.hits
-            ]
-        }
-
-    # The same four maintenance tools as the stdio surfaces (§6.3). No review prompt
-    # here — MCP prompts are a stdio-client capability; HTTP clients use the tools.
+    # The same two memory tools and the same four maintenance tools as the stdio
+    # surface (§6.3) — registered from the shared module so names, signatures,
+    # return shapes, descriptions and annotations are identical by construction
+    # (pinned by tests/test_mcp_tool_metadata.py). No review prompt here — MCP
+    # prompts are a stdio-client capability; HTTP clients use the tools.
+    register_memory_tools(mcp, gateway)
     register_maintenance_tools(mcp, gateway)
 
     return mcp, build_app
