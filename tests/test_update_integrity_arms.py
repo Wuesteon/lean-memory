@@ -168,6 +168,161 @@ def test_mem0_arm_scenario_error_keeps_the_table_aligned(tmp_path):
     assert "ollama is down" in results[0].detail
 
 
+def test_infrastructure_failures_are_not_counted_as_engine_answers(tmp_path, capsys):
+    """A dead backend must not pad the published denominator with FAILs."""
+    class _Exploding(_FakeMem0Module):
+        class Memory:
+            @staticmethod
+            def from_config(config):
+                raise RuntimeError("ollama is down")
+
+    scenario = next(s for s in SCENARIOS if s.key == "employer_change")
+    results = Mem0Arm(_Exploding(), timeout=0).run_scenario(scenario, tmp_path)
+
+    assert [r.error for r in results] == [True, True, True]
+    all_ok = emit([(scenario.key, results)], "# header", markdown=True)
+    out = capsys.readouterr().out
+
+    assert all_ok is False, "an infra failure must still fail the run"
+    assert "| employer_change | top1-is-current | error (harness) | " in out
+    assert "0/0 assertions" in out, "error rows leave the tally empty, not 0/3"
+    assert "3 assertion(s) rendered `error (harness)`" in out
+
+
+# --- retirement evidence ----------------------------------------------------
+
+
+def _module_returning(client_factory):
+    module = _FakeMem0Module()
+    module.Memory = type("M", (), {"from_config": staticmethod(client_factory)})
+    return module
+
+
+CITY_MOVE = next(s for s in SCENARIOS if s.key == "city_move")
+
+
+def test_a_stale_top1_is_a_fail_not_a_pass(tmp_path):
+    """top-1 is NOT exempt from the retirement sweep in this arm.
+
+    mem0's top-1 can be the stale memory (it was, in the published run), so
+    exempting it by identity both misattributes the failure and lets a stale
+    top-1 score a PASS off an unrelated history row.
+    """
+    class _StaleTop1(_FakeMem0Client):
+        def add(self, messages, *, user_id=None, timestamp=None, **kwargs):
+            if timestamp is not None:
+                raise ValueError(f"add(timestamp): {TEMPORAL_REFUSAL}")
+            self._rows[:] = [{"id": "m0", "memory": "User lives in Berlin.",
+                              "user_id": user_id, "event": "ADD"}]
+            return {"results": [dict(self._rows[0])]}
+
+        def history(self, memory_id):
+            return [{"memory_id": memory_id, "event": "UPDATE",
+                     "old_memory": "User lives in Berlin.",
+                     "new_memory": "User lives in Munich."}]
+
+    results = Mem0Arm(_module_returning(_StaleTop1), timeout=0).run_scenario(
+        CITY_MOVE, tmp_path)
+    retired = next(r for r in results if r.name == "old-fact-retired")
+
+    assert retired.ok is False
+    assert "still a current memory" in retired.detail
+    assert "User lives in Berlin." in retired.detail
+
+
+def test_a_consolidated_memory_stating_the_new_value_is_not_counted_as_stale(tmp_path):
+    """"...previously Berlin, but now Munich." is the current fact, not a leak."""
+    class _Consolidated(_FakeMem0Client):
+        def add(self, messages, *, user_id=None, timestamp=None, **kwargs):
+            if timestamp is not None:
+                raise ValueError(f"add(timestamp): {TEMPORAL_REFUSAL}")
+            self._rows[:] = [{"id": "m0", "user_id": user_id, "event": "UPDATE",
+                              "memory": "User lived in Berlin but now lives in Munich."}]
+            return {"results": [dict(self._rows[0])]}
+
+        def history(self, memory_id):
+            return [{"memory_id": memory_id, "event": "UPDATE",
+                     "old_memory": "User lives in Berlin.",
+                     "new_memory": "User lives in Munich."}]
+
+    results = Mem0Arm(_module_returning(_Consolidated), timeout=0).run_scenario(
+        CITY_MOVE, tmp_path)
+    retired = next(r for r in results if r.name == "old-fact-retired")
+
+    assert retired.ok is True, retired.detail
+    assert "UPDATE" in retired.detail
+
+
+def test_history_sweep_covers_live_ids_add_never_echoed(tmp_path):
+    """A retirement mem0 performed without naming the id in add() still counts."""
+    class _SilentAdd(_FakeMem0Client):
+        def add(self, messages, *, user_id=None, timestamp=None, **kwargs):
+            if timestamp is not None:
+                raise ValueError(f"add(timestamp): {TEMPORAL_REFUSAL}")
+            self._rows[:] = [{"id": "live-1", "user_id": user_id,
+                              "memory": "User lives in Munich.", "event": "UPDATE"}]
+            return {"results": []}  # no ids echoed back
+
+        def history(self, memory_id):
+            assert memory_id == "live-1"
+            return [{"memory_id": memory_id, "event": "UPDATE",
+                     "old_memory": "User lives in Berlin.",
+                     "new_memory": "User lives in Munich."}]
+
+    results = Mem0Arm(_module_returning(_SilentAdd), timeout=0).run_scenario(
+        CITY_MOVE, tmp_path)
+    retired = next(r for r in results if r.name == "old-fact-retired")
+
+    assert retired.ok is True, retired.detail
+    assert "UPDATE live-1" in retired.detail
+
+
+# --- call-shape detection ---------------------------------------------------
+
+
+def test_a_genuine_internal_typeerror_is_not_masked_by_the_legacy_retry(tmp_path):
+    """Only signature inspection picks the call shape — never `except TypeError`."""
+    class _BrokenInternals(_FakeMem0Client):
+        def search(self, query, *, filters=None, top_k=20, **kwargs):
+            raise TypeError("unhashable type: 'dict' (inside the scorer)")
+
+    results = Mem0Arm(_module_returning(_BrokenInternals), timeout=0).run_scenario(
+        CITY_MOVE, tmp_path)
+
+    assert "unhashable type: 'dict' (inside the scorer)" in results[0].detail
+    assert "user_id" not in results[0].detail, "the legacy retry masked the real error"
+
+
+def test_pre_2x_mem0_signature_is_detected_and_used(tmp_path):
+    class _Legacy:
+        def __init__(self, config):
+            self._rows = []
+
+        def add(self, messages, *, user_id=None, timestamp=None, **kwargs):
+            if timestamp is not None:
+                raise ValueError(f"add(timestamp): {TEMPORAL_REFUSAL}")
+            self._rows.append({"id": f"m{len(self._rows)}", "memory": str(messages),
+                               "user_id": user_id, "event": "ADD"})
+            return {"results": [dict(self._rows[-1])]}
+
+        def search(self, query, user_id=None, limit=20, **kwargs):
+            if kwargs.get("reference_date") is not None:
+                raise ValueError(f"search(reference_date): {TEMPORAL_REFUSAL}")
+            return {"results": [dict(r) for r in self._rows][:limit]}
+
+        def get_all(self, user_id=None, limit=20, **kwargs):
+            return {"results": [dict(r) for r in self._rows][:limit]}
+
+        def history(self, memory_id):
+            return []
+
+    arm = Mem0Arm(_module_returning(_Legacy), timeout=0)
+    results = arm.run_scenario(CITY_MOVE, tmp_path)
+
+    assert arm._search_is_2x is False and arm._get_all_is_2x is False
+    assert [r.name for r in results] == assertion_names(CITY_MOVE)
+
+
 # --- header pins the backend ------------------------------------------------
 
 
@@ -188,10 +343,56 @@ def test_mem0_memory_config_is_local_only(tmp_path):
 
     assert config["llm"] == {"provider": "ollama",
                              "config": {"model": "qwen2.5:3b", "temperature": 0.0,
+                                        "top_p": 0.1, "max_tokens": 2000,
                                         "ollama_base_url": "http://localhost:11434"}}
     assert config["embedder"]["config"]["model"] == "nomic-embed-text"
     assert config["vector_store"]["config"]["path"].startswith(str(tmp_path))
     assert config["history_db_path"].startswith(str(tmp_path))
+
+
+def test_sampling_config_is_pinned_not_hard_coded(tmp_path):
+    """Sampling must come from Mem0Config so the header can pin it (review WP2)."""
+    arm = Mem0Arm(_FakeMem0Module(), Mem0Config(temperature=0.7, top_p=0.9,
+                                                max_tokens=128), timeout=0)
+    llm = arm.memory_config(tmp_path, "employer_change")["llm"]["config"]
+
+    assert (llm["temperature"], llm["top_p"], llm["max_tokens"]) == (0.7, 0.9, 128)
+    header = arm.header("3.13.7")
+    assert "temperature=0.7" in header and "top_p=0.9" in header
+    assert "max_tokens=128" in header
+
+
+def test_header_pins_the_search_knobs_and_they_reach_the_call(tmp_path):
+    """`threshold`/`rerank` are passed, not left as silent mem0 defaults."""
+    seen = {}
+
+    class _Recording(_FakeMem0Client):
+        def search(self, query, *, filters=None, threshold=None, rerank=None,
+                   **kwargs):
+            seen["threshold"], seen["rerank"] = threshold, rerank
+            return super().search(query, filters=filters, **kwargs)
+
+    module = _FakeMem0Module()
+    module.Memory = type("M", (), {"from_config": staticmethod(_Recording)})
+    arm = Mem0Arm(module, Mem0Config(search_threshold=0.42, search_rerank=True),
+                  timeout=0)
+    arm.run_scenario(next(s for s in SCENARIOS if s.key == "city_move"), tmp_path)
+
+    assert seen == {"threshold": 0.42, "rerank": True}
+    assert "search(threshold=0.42, rerank=True)" in arm.header("3.13.7")
+
+
+def test_header_pins_whether_mem0s_non_semantic_retrieval_halves_are_installed():
+    """mem0 ranks semantic + BM25 + entity-boost; missing extras disable halves."""
+    header = _fake_arm().header("3.13.7")
+
+    assert "hybrid_bm25=" in header, "the fastembed/BM25 state must be pinned"
+    assert "lemmatizer+entity_boost=" in header, "the spaCy state must be pinned"
+    # The probe must report the truth about THIS interpreter, either way.
+    import importlib.util
+
+    has_fastembed = importlib.util.find_spec("fastembed") is not None
+    assert ("hybrid_bm25=on" in header) is has_fastembed
 
 
 def test_mem0_config_flags_reach_the_header():

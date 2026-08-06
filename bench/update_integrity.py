@@ -8,10 +8,19 @@ backbone. `python bench/update_integrity.py --markdown` renders the table.
 `--arm mem0` runs the identical scenarios against mem0's public API instead
 (opt-in, needs `pip install mem0ai` plus a configured LLM backend); the two
 tables use the same assertion names so they compare cell-for-cell.
+
+Install mem0's retrieval extras too — `mem0ai[extras]` (fastembed/BM25) and
+`mem0ai[nlp]` (spaCy). mem0 2.x ranks `semantic + BM25 + entity-boost`, and
+without them the two non-semantic halves are silently disabled, which would
+handicap the arm under test. The emitted header pins which of them were
+present; see `mem0_retrieval_extras()`.
 """
 
 from __future__ import annotations
 
+import importlib.metadata
+import importlib.util
+import inspect
 import signal
 import sys
 import time
@@ -57,6 +66,12 @@ class AssertionResult:
     # assertion checks (see Mem0Arm). Such rows render `n/a (unsupported)` and
     # are excluded from the PASS tally — never silently dropped.
     supported: bool = True
+    # True when the scenario never produced a graded answer at all — a harness
+    # timeout, or an uncaught exception from the run (e.g. the LLM backend is
+    # down). Such rows render `error (harness)` and are excluded from BOTH
+    # sides of the tally, because an infrastructure failure is not the engine
+    # giving a wrong answer. They still force a non-zero exit.
+    error: bool = False
 
 
 def _texts(hits) -> list[str]:
@@ -70,10 +85,33 @@ def _contains(needle: str, haystack: str) -> bool:
     source sentence, mem0 canonicalises to third person, e.g. "Works at
     Acme"). Casing is cosmetic, so it must not decide a comparison; the
     matcher is deliberately the same for both arms rather than lenient for
-    one. Every needle and haystack in `SCENARIOS` is already lower-case, so
-    the default arm's results are unchanged by this.
+    one.
+
+    Several needles in `SCENARIOS` are mixed-case (`Zorbex`, `Acme`, `Berlin`,
+    `Munich`, `Globex`); the relaxation is nonetheless a no-op for the
+    lean-memory arm because lean-memory echoes the source sentence verbatim,
+    so those needles already match case-sensitively (verified: the arm's table
+    is byte-identical before and after). The casing guarantee itself is not
+    left to this matcher — `tests/test_update_integrity_scenarios.py` pins it
+    with a case-sensitive assertion so a rendering regression still fails.
     """
     return needle.casefold() in haystack.casefold()
+
+
+def _carries_retired_value(text: str, scenario: Scenario) -> bool:
+    """True when `text` still carries the retired value and is not the current one.
+
+    Shared by both arms so the retirement check is literally the same
+    predicate. A single consolidated memory may legitimately mention the old
+    value while asserting the new one ("previously at Acme, but now works at
+    Zorbex") — that is the current fact, not a surviving stale one, so it is
+    excluded by *containing the expected current value*, not by being
+    identical to top-1. Excluding top-1 by identity would be wrong in any arm
+    whose top-1 can itself be the stale memory: mem0's can, and in the
+    published run it was.
+    """
+    return (_contains(scenario.expect_retired_contains or "", text)
+            and not _contains(scenario.expect_top1_contains, text))
 
 
 def assertion_names(scenario: Scenario) -> list[str]:
@@ -118,8 +156,7 @@ def run_scenario(scenario: Scenario, root: Path) -> list[AssertionResult]:
             )
             match = next(
                 (h.fact for h in everything
-                 if _contains(scenario.expect_retired_contains, h.fact.fact_text)
-                 and h.fact.fact_text != top1),
+                 if _carries_retired_value(h.fact.fact_text, scenario)),
                 None,
             )
             ok = (match is not None and not match.is_latest
@@ -271,9 +308,32 @@ SCENARIOS: list[Scenario] = [
 # assertion still runs: the adapter probes the installed library, records the
 # library's own refusal as the Detail, and the row renders
 # `n/a (unsupported)` — never a silent skip.
+#
+# What the fairness rule does NOT cover, and what therefore must travel with
+# any quoted tally (see the caveats in docs/competitive-landscape.md):
+#
+# 1. Scenario-text provenance. `SCENARIOS` was written against lean-memory's
+#    offline regex extractor lexicon — the frozen plan's "Scenario-text rule
+#    (load-bearing)" says the texts "must hit this lexicon — do not reword
+#    them". They were never re-tuned for mem0, and the same fixed texts go to
+#    both arms. That is a selection bias in lean-memory's favour on every
+#    extraction-dependent row.
+# 2. Extractor asymmetry. The lean-memory arm runs deterministic stub
+#    backends and makes no LLM call at all, so it never faces an extraction
+#    decision; the mem0 arm runs mem0's LLM extraction. The aggregate
+#    pass counts are therefore NOT an apples-to-apples extraction comparison —
+#    they compare a rule-based pipeline on its own lexicon against an LLM
+#    pipeline on someone else's.
+#
+# What the head-to-head does support is the architectural rows: whether a
+# retired value stays queryable, and whether a point-in-time read exists.
 # ---------------------------------------------------------------------------
 
-MEM0_INSTALL_HINT = "mem0 is not installed — install it with: pip install mem0ai"
+MEM0_INSTALL_HINT = (
+    "mem0 is not installed — install it with: "
+    'pip install mem0ai[extras] mem0ai[nlp] '
+    "(the extras enable mem0's BM25 + entity-boost retrieval halves; without "
+    "them the arm measures a handicapped mem0)")
 
 
 def _import_mem0():
@@ -310,6 +370,51 @@ def _time_budget(seconds: int | None):
         signal.signal(signal.SIGALRM, previous)
 
 
+def _optional_extra(module: str, distribution: str) -> str | None:
+    """Version of an installed optional dependency, or None when it is absent.
+
+    Uses `find_spec` + distribution metadata so the probe never imports (and
+    never triggers a model download) just to answer the question.
+    """
+    if importlib.util.find_spec(module) is None:
+        return None
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:  # pragma: no cover
+        return "unknown"
+
+
+def mem0_retrieval_extras() -> str:
+    """Pin the optional mem0 extras that silently change how mem0 retrieves.
+
+    mem0 2.x does not rank on embeddings alone: `_search_vector_store` scores
+    `semantic + BM25 + entity-boost` (mem0/memory/main.py). Both non-semantic
+    halves are opt-in extras that fail *quietly* — a `logger.warning` and
+    nothing in the results:
+
+    - no `fastembed` → the Qdrant store's `keyword_search()` returns None, so
+      `bm25_scores` is empty for every query and mem0's keyword half is off;
+    - no `spacy` (+ the `en_core_web_sm` model) → the query is not lemmatised
+      and `extract_entities()` yields nothing, so entity boosts are empty.
+
+    A run against a mem0 missing these is a run against a materially different
+    retriever, so the state belongs in the pinned header rather than in the
+    reader's assumptions.
+    """
+    fastembed = _optional_extra("fastembed", "fastembed")
+    spacy = _optional_extra("spacy", "spacy")
+    model = importlib.util.find_spec("en_core_web_sm") is not None
+    bm25 = f"hybrid_bm25=on (fastembed {fastembed})" if fastembed \
+        else "hybrid_bm25=OFF (fastembed missing — mem0's keyword half disabled)"
+    if spacy and model:
+        nlp = f"lemmatizer+entity_boost=on (spacy {spacy} + en_core_web_sm)"
+    elif spacy:
+        nlp = f"lemmatizer+entity_boost=OFF (spacy {spacy}, en_core_web_sm missing)"
+    else:
+        nlp = "lemmatizer+entity_boost=OFF (spacy missing)"
+    return f"{bm25}, {nlp}"
+
+
 @dataclass(frozen=True)
 class Mem0Config:
     """Exactly what the mem0 arm was configured with — pinned in the header."""
@@ -321,6 +426,19 @@ class Mem0Config:
     embedding_dims: int = 768
     ollama_base_url: str = "http://localhost:11434"
     vector_store: str = "qdrant"
+    # Sampling. mem0's ollama path forwards exactly temperature, top_p and
+    # num_predict (=max_tokens) and no seed (mem0/llms/ollama.py), so these
+    # are the only decoding knobs a reader can re-derive the run from. They
+    # are pinned here rather than hard-coded inside `memory_config`.
+    # `top_p`/`max_tokens` restate mem0's own BaseLlmConfig defaults, so the
+    # emitted numbers describe the run without changing it.
+    temperature: float = 0.0
+    top_p: float = 0.1
+    max_tokens: int = 2000
+    # mem0 `search()` knobs. Passed explicitly (not left as mem0 defaults) so
+    # the header describes the call that was actually made.
+    search_threshold: float = 0.1
+    search_rerank: bool = False
 
     def label(self) -> str:
         return (
@@ -328,7 +446,12 @@ class Mem0Config:
             f"embedder={self.embedder_provider}/{self.embedder_model} "
             f"({self.embedding_dims}d), "
             f"vector_store={self.vector_store} (local, on-disk), "
-            f"ollama_base_url={self.ollama_base_url}"
+            f"ollama_base_url={self.ollama_base_url}, "
+            f"temperature={self.temperature}, top_p={self.top_p}, "
+            f"max_tokens={self.max_tokens}, no seed, "
+            f"search(threshold={self.search_threshold}, "
+            f"rerank={self.search_rerank}), "
+            f"{mem0_retrieval_extras()}"
         )
 
 
@@ -351,6 +474,10 @@ class Mem0Arm:
         self._timestamp_error: str | None = None
         self._reference_date_supported: bool | None = None
         self._reference_date_error: str | None = None
+        # Which call shape the installed mem0 uses; decided once by signature
+        # inspection, never by catching a TypeError from the call itself.
+        self._search_is_2x: bool | None = None
+        self._get_all_is_2x: bool | None = None
 
     # -- identity -----------------------------------------------------------
 
@@ -375,7 +502,10 @@ class Mem0Arm:
             print(message, file=self._progress, flush=True)
 
     def memory_config(self, root: Path, ns: str) -> dict:
-        llm_cfg: dict = {"model": self.config.llm_model, "temperature": 0.0}
+        llm_cfg: dict = {"model": self.config.llm_model,
+                         "temperature": self.config.temperature,
+                         "top_p": self.config.top_p,
+                         "max_tokens": self.config.max_tokens}
         emb_cfg: dict = {"model": self.config.embedder_model,
                          "embedding_dims": self.config.embedding_dims}
         if self.config.llm_provider == "ollama":
@@ -448,18 +578,37 @@ class Mem0Arm:
                 self._timestamp_error = f"{type(exc).__name__}: {exc}"
         return self._items(client.add(step.text, user_id=ns))
 
-    def _search(self, client, ns: str, query: str, k: int, **extra) -> list[dict]:
+    @staticmethod
+    def _accepts(fn, name: str) -> bool:
+        """Does `fn` declare parameter `name`? (False when uninspectable.)
+
+        Signature inspection — not `except TypeError` around the call — is what
+        chooses the 2.x vs pre-2.0 shape. A blanket `except TypeError` would
+        also swallow a genuine TypeError raised deep inside mem0's search path
+        (vector store, embedder, scorer) and re-raise the legacy call's error
+        instead, masking the real cause in a published Detail cell.
+        """
         try:
-            return self._items(
-                client.search(query, filters={"user_id": ns}, top_k=k, **extra))
-        except TypeError:  # pre-2.0 mem0 signature
-            return self._items(client.search(query, user_id=ns, limit=k, **extra))
+            return name in inspect.signature(fn).parameters
+        except (TypeError, ValueError):  # pragma: no cover - C-level callables
+            return False
+
+    def _search(self, client, ns: str, query: str, k: int, **extra) -> list[dict]:
+        if self._search_is_2x is None:
+            self._search_is_2x = self._accepts(client.search, "filters")
+        if self._search_is_2x:
+            return self._items(client.search(
+                query, filters={"user_id": ns}, top_k=k,
+                threshold=self.config.search_threshold,
+                rerank=self.config.search_rerank, **extra))
+        return self._items(client.search(query, user_id=ns, limit=k, **extra))
 
     def _get_all(self, client, ns: str, k: int) -> list[dict]:
-        try:
+        if self._get_all_is_2x is None:
+            self._get_all_is_2x = self._accepts(client.get_all, "filters")
+        if self._get_all_is_2x:
             return self._items(client.get_all(filters={"user_id": ns}, top_k=k))
-        except TypeError:  # pre-2.0 mem0 signature
-            return self._items(client.get_all(user_id=ns, limit=k))
+        return self._items(client.get_all(user_id=ns, limit=k))
 
     def _history(self, client, memory_id: str) -> list[dict]:
         try:
@@ -470,16 +619,31 @@ class Mem0Arm:
     # -- assertions ---------------------------------------------------------
 
     def _retired_assertion(self, client, ns: str, scenario: Scenario,
-                           seen_ids: list[str], top1: str, ingest: str) -> AssertionResult:
+                           seen_ids: list[str], ingest: str) -> AssertionResult:
         needle = scenario.expect_retired_contains or ""
-        live = [self._text(item) for item in self._get_all(client, ns, 50)]
-        still_live = [t for t in live if _contains(needle, t) and t != top1]
+        live_items = self._get_all(client, ns, 50)
+        # Every live memory is checked, top-1 included: in this arm top-1 is
+        # not guaranteed to be the current fact (see `_carries_retired_value`),
+        # so excluding it by identity would both misattribute the failure and
+        # let a stale top-1 score a false PASS.
+        still_live = [self._text(item) for item in live_items
+                      if _carries_retired_value(self._text(item), scenario)]
         if still_live:
             return AssertionResult(
                 "old-fact-retired", False,
                 f"old value is still a current memory in mem0: {still_live!r}")
+        # Sweep the history of every memory the run touched OR that is still
+        # live. Restricting this to ids echoed back by `add()` would turn a
+        # retirement mem0 performed without naming the id in its add response
+        # into a bogus "no retirement record" FAIL — an adapter blind spot
+        # reported as an observation about mem0.
+        ids = list(seen_ids)
+        for item in live_items:
+            memory_id = item.get("id")
+            if memory_id and str(memory_id) not in ids:
+                ids.append(str(memory_id))
         evidence: list[str] = []
-        for memory_id in seen_ids:
+        for memory_id in ids:
             for row in self._history(client, memory_id):
                 event = str(row.get("event", "")).upper()
                 old = str(row.get("old_memory") or row.get("prev_value") or "")
@@ -534,12 +698,21 @@ class Mem0Arm:
         except Exception as exc:
             results = self._error_rows(scenario, f"{type(exc).__name__}: {exc}")
         self._note(f"[mem0] {scenario.key}: {time.monotonic() - started:.1f}s "
-                   + " ".join(f"{r.name}={'n/a' if not r.supported else r.ok}"
+                   + " ".join(f"{r.name}="
+                              + ("error" if r.error else
+                                 "n/a" if not r.supported else str(r.ok))
                               for r in results))
         return results
 
     def _error_rows(self, scenario: Scenario, detail: str) -> list[AssertionResult]:
-        """Keep the table aligned when a scenario blows up or times out."""
+        """Keep the table aligned when a scenario blows up or times out.
+
+        These rows are marked `error`: a SIGALRM timeout or a dead LLM backend
+        is not mem0 answering wrongly, so counting them as FAILs would inflate
+        the published denominator with infrastructure noise. They are excluded
+        from both sides of the tally, surfaced in their own summary line, and
+        still force a non-zero exit.
+        """
         rows = []
         for name in assertion_names(scenario):
             unsupported = (name == "as-of-returns-old-truth"
@@ -547,7 +720,8 @@ class Mem0Arm:
             rows.append(AssertionResult(
                 name, False,
                 self._reference_date_error if unsupported else detail,
-                supported=not unsupported))
+                supported=not unsupported,
+                error=not unsupported))
         return rows
 
     def _run(self, scenario: Scenario, root: Path) -> list[AssertionResult]:
@@ -586,7 +760,7 @@ class Mem0Arm:
 
             if scenario.expect_retired_contains is not None:
                 out.append(
-                    self._retired_assertion(client, ns, scenario, seen_ids, top1, ingest))
+                    self._retired_assertion(client, ns, scenario, seen_ids, ingest))
 
             if scenario.as_of is not None and scenario.expect_as_of_top1_contains is not None:
                 out.append(self._as_of_assertion(client, ns, scenario))
@@ -609,21 +783,34 @@ class Mem0Arm:
 
 def emit(rows: list[tuple[str, list[AssertionResult]]], header: str,
          markdown: bool) -> bool:
-    """Render the results table; returns True when every graded assertion passed."""
-    graded = [r for _, results in rows for r in results if r.supported]
-    unsupported = [r for _, results in rows for r in results if not r.supported]
-    all_ok = all(r.ok for r in graded)
+    """Render the results table; returns True when every graded assertion passed.
+
+    Three row states, only the first of which is graded: PASS/FAIL (an engine
+    answer), `n/a (unsupported)` (the arm's API has no equivalent), and
+    `error (harness)` (the scenario never produced an answer — timeout or an
+    uncaught exception). Both ungraded states are excluded from the tally and
+    reported in their own summary line; an error still fails the run.
+    """
+    errors = [r for _, results in rows for r in results if r.error]
+    graded = [r for _, results in rows for r in results
+              if r.supported and not r.error]
+    unsupported = [r for _, results in rows for r in results
+                   if not r.supported and not r.error]
+    all_ok = all(r.ok for r in graded) and not errors
     if markdown:
         print(header + "\n")
         print("| Scenario | Assertion | Result | Detail |")
         print("|---|---|---|---|")
         for key, results in rows:
             for r in results:
-                if not r.supported:
+                if r.error:
+                    status = "error (harness)"
+                elif not r.supported:
                     status = "n/a (unsupported)"
                 else:
                     status = "PASS" if r.ok else "FAIL"
-                detail = "" if (r.ok and r.supported) else r.detail.replace("|", "\\|")
+                detail = ("" if (r.ok and r.supported and not r.error)
+                          else r.detail.replace("|", "\\|"))
                 print(f"| {key} | {r.name} | {status} | {detail} |")
         summary = (f"\n**{'ALL PASS' if all_ok else 'FAILURES PRESENT'}** — "
                    f"{sum(r.ok for r in graded)}/{len(graded)} assertions.")
@@ -631,11 +818,17 @@ def emit(rows: list[tuple[str, list[AssertionResult]]], header: str,
             summary += (f" {len(unsupported)} further assertion(s) rendered "
                         f"`n/a (unsupported)` — no equivalent in this arm's API, "
                         f"excluded from the tally.")
+        if errors:
+            summary += (f" {len(errors)} assertion(s) rendered `error (harness)` "
+                        f"— the scenario never produced an answer (timeout or "
+                        f"uncaught exception), excluded from the tally.")
         print(summary)
     else:
         for key, results in rows:
             for r in results:
-                if not r.supported:
+                if r.error:
+                    print(f"{key:32s} {r.name:28s} error {r.detail}")
+                elif not r.supported:
                     print(f"{key:32s} {r.name:28s} n/a   {r.detail}")
                 else:
                     print(f"{key:32s} {r.name:28s} {'PASS' if r.ok else 'FAIL  ' + r.detail}")
