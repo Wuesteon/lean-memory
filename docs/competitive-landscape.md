@@ -351,10 +351,10 @@ aggregate tallies are *not* an apples-to-apples engine comparison (caveat 1).
 
 **Arm B — mem0** (`mem0ai` 2.0.17 with both retrieval extras installed —
 `fastembed` 0.8.0, `spacy` 3.8.13 + `en_core_web_sm` — plus `ollama` client
-0.6.2 and `qdrant-client` 1.19.0, macOS 15, run 2026-08-07; **byte-identical
-across four consecutive runs**, ~27 s of scenario wall-clock each after
-warm-up). Every knob the run depends on is in the header below, so the
-reproducibility is re-derivable rather than merely asserted: mem0's Ollama
+0.6.2 and `qdrant-client` 1.19.0, macOS 26.5.2 arm64, run 2026-08-07;
+**byte-identical across four consecutive runs**, ~27 s of scenario wall-clock
+each after warm-up). Every knob the run depends on is in the header below, so
+the reproducibility is re-derivable rather than merely asserted: mem0's Ollama
 path forwards `temperature`, `top_p` and `num_predict` and **no seed**, so
 those three plus the `search()` knobs are the whole decoding surface.
 
