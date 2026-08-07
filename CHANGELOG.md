@@ -4,7 +4,12 @@ All notable changes to lean-memory are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-08-07
+
+Feature release: entity names resolve on a normalized key (schema v3 with an
+in-place migration — the reason this is a minor bump, not a patch: downgrade
+is one-way), the lowercase-first-person extractor fix, and the mem0 OSS
+comparison arm for the update-integrity benchmark.
 
 ### Changed
 
@@ -71,6 +76,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the stub never reads that argument. `OllamaTyper`'s known-entity
   canonicalization, which does, now uses the shared entity key instead of a
   local `.lower()` (which missed `ß`, `ﬁ`, and whitespace runs).
+
+### Added
+
+- **mem0 comparison arm for the update-integrity benchmark (WP2 Task 5)** —
+  `bench/update_integrity.py --arm mem0` runs the same ten supersession
+  scenarios against mem0 OSS with assertion names shared cell-for-cell with
+  the default arm; missing install exits 2 with a hint, never a silent skip;
+  the emitted header pins `mem0.__version__`, the LLM/embedder/vector-store
+  config, sampling knobs, and whether mem0's BM25 + entity-boost retrieval
+  halves are installed. A reproduced fully-local run (mem0 2.0.17 on Ollama
+  qwen2.5:3b, byte-identical across nine runs) with backbone and
+  scenario-selection caveats is recorded in the `docs/competitive-landscape.md`
+  appendix. The default arm's output is byte-identical to before. Closes
+  [#15](https://github.com/Wuesteon/lean-memory/issues/15).
 
 ## [0.2.4] - 2026-08-06
 
