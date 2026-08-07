@@ -4,12 +4,29 @@ Small, honest, reproducible: when a fact changes, does the engine return the
 current truth, retire the old fact, and keep it queryable via `as_of`?
 Public API only (`Memory.add` / `Memory.search`); no LLM judge, no frozen
 backbone. `python bench/update_integrity.py --markdown` renders the table.
+
+`--arm mem0` runs the identical scenarios against mem0's public API instead
+(opt-in, needs `pip install mem0ai` plus a configured LLM backend); the two
+tables use the same assertion names so they compare cell-for-cell.
+
+Install mem0's retrieval extras too — `mem0ai[extras]` (fastembed/BM25) and
+`mem0ai[nlp]` (spaCy). mem0 2.x ranks `semantic + BM25 + entity-boost`, and
+without them the two non-semantic halves are silently disabled, which would
+handicap the arm under test. The emitted header pins which of them were
+present; see `mem0_retrieval_extras()`.
 """
 
 from __future__ import annotations
 
+import importlib.metadata
+import importlib.util
+import inspect
+import signal
 import sys
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -45,10 +62,71 @@ class AssertionResult:
     name: str
     ok: bool
     detail: str = ""
+    # False only when the arm under test has no equivalent of the concept the
+    # assertion checks (see Mem0Arm). Such rows render `n/a (unsupported)` and
+    # are excluded from the PASS tally — never silently dropped.
+    supported: bool = True
+    # True when the scenario never produced a graded answer at all — a harness
+    # timeout, or an uncaught exception from the run (e.g. the LLM backend is
+    # down). Such rows render `error (harness)` and are excluded from BOTH
+    # sides of the tally, because an infrastructure failure is not the engine
+    # giving a wrong answer. They still force a non-zero exit.
+    error: bool = False
 
 
 def _texts(hits) -> list[str]:
     return [h.fact.fact_text for h in hits]
+
+
+def _contains(needle: str, haystack: str) -> bool:
+    """Case-insensitive substring match — identical semantics in every arm.
+
+    Engines differ in how they render a stored fact (lean-memory keeps the
+    source sentence, mem0 canonicalises to third person, e.g. "Works at
+    Acme"). Casing is cosmetic, so it must not decide a comparison; the
+    matcher is deliberately the same for both arms rather than lenient for
+    one.
+
+    Several needles in `SCENARIOS` are mixed-case (`Zorbex`, `Acme`, `Berlin`,
+    `Munich`, `Globex`); the relaxation is nonetheless a no-op for the
+    lean-memory arm because lean-memory echoes the source sentence verbatim,
+    so those needles already match case-sensitively (verified: the arm's table
+    is byte-identical before and after). The casing guarantee itself is not
+    left to this matcher — `tests/test_update_integrity_scenarios.py` pins it
+    with a case-sensitive assertion so a rendering regression still fails.
+    """
+    return needle.casefold() in haystack.casefold()
+
+
+def _carries_retired_value(text: str, scenario: Scenario) -> bool:
+    """True when `text` still carries the retired value and is not the current one.
+
+    Shared by both arms so the retirement check is literally the same
+    predicate. A single consolidated memory may legitimately mention the old
+    value while asserting the new one ("previously at Acme, but now works at
+    Zorbex") — that is the current fact, not a surviving stale one, so it is
+    excluded by *containing the expected current value*, not by being
+    identical to top-1. Excluding top-1 by identity would be wrong in any arm
+    whose top-1 can itself be the stale memory: mem0's can, and in the
+    published run it was.
+    """
+    return (_contains(scenario.expect_retired_contains or "", text)
+            and not _contains(scenario.expect_top1_contains, text))
+
+
+def assertion_names(scenario: Scenario) -> list[str]:
+    """The assertion rows a scenario produces, in order — shared by all arms.
+
+    This is the contract that makes two arms' tables comparable cell-for-cell.
+    """
+    names = ["top1-is-current"]
+    if scenario.expect_retired_contains is not None:
+        names.append("old-fact-retired")
+    if scenario.as_of is not None and scenario.expect_as_of_top1_contains is not None:
+        names.append("as-of-returns-old-truth")
+    if scenario.expect_all_latest_contain is not None:
+        names.append("latest-set-exact")
+    return names
 
 
 def run_scenario(scenario: Scenario, root: Path) -> list[AssertionResult]:
@@ -67,7 +145,7 @@ def run_scenario(scenario: Scenario, root: Path) -> list[AssertionResult]:
         top1 = latest[0].fact.fact_text if latest else "<no results>"
         out.append(AssertionResult(
             "top1-is-current",
-            scenario.expect_top1_contains in top1,
+            _contains(scenario.expect_top1_contains, top1),
             f"expected {scenario.expect_top1_contains!r} in top-1, got {top1!r}",
         ))
 
@@ -78,8 +156,7 @@ def run_scenario(scenario: Scenario, root: Path) -> list[AssertionResult]:
             )
             match = next(
                 (h.fact for h in everything
-                 if scenario.expect_retired_contains in h.fact.fact_text
-                 and h.fact.fact_text != top1),
+                 if _carries_retired_value(h.fact.fact_text, scenario)),
                 None,
             )
             ok = (match is not None and not match.is_latest
@@ -100,14 +177,14 @@ def run_scenario(scenario: Scenario, root: Path) -> list[AssertionResult]:
             h1 = hist[0].fact.fact_text if hist else "<no results>"
             out.append(AssertionResult(
                 "as-of-returns-old-truth",
-                scenario.expect_as_of_top1_contains in h1,
+                _contains(scenario.expect_as_of_top1_contains, h1),
                 f"expected {scenario.expect_as_of_top1_contains!r} in as-of top-1, got {h1!r}",
             ))
 
         if scenario.expect_all_latest_contain is not None:
             texts = _texts(latest)
             missing = [s for s in scenario.expect_all_latest_contain
-                       if not any(s in t for t in texts)]
+                       if not any(_contains(s, t) for t in texts)]
             ok = not missing and len(texts) == len(scenario.expect_all_latest_contain)
             out.append(AssertionResult(
                 "latest-set-exact",
@@ -220,8 +297,547 @@ SCENARIOS: list[Scenario] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# mem0 comparison arm (WP2 plan, Task 5) — opt-in via `--arm mem0`.
+#
+# Fairness rule: the adapter maps each scenario onto mem0's own public API as
+# faithfully as that API allows, and runs the SAME assertions under the SAME
+# names and in the same order as the lean-memory arm, so the two tables compare
+# cell-for-cell. Nothing is relaxed for one arm or tightened for the other.
+# Where a mem0 concept genuinely does not exist (point-in-time reads), the
+# assertion still runs: the adapter probes the installed library, records the
+# library's own refusal as the Detail, and the row renders
+# `n/a (unsupported)` — never a silent skip.
+#
+# What the fairness rule does NOT cover, and what therefore must travel with
+# any quoted tally (see the caveats in docs/competitive-landscape.md):
+#
+# 1. Scenario-text provenance. `SCENARIOS` was written against lean-memory's
+#    offline regex extractor lexicon — the frozen plan's "Scenario-text rule
+#    (load-bearing)" says the texts "must hit this lexicon — do not reword
+#    them". They were never re-tuned for mem0, and the same fixed texts go to
+#    both arms. That is a selection bias in lean-memory's favour on every
+#    extraction-dependent row.
+# 2. Extractor asymmetry. The lean-memory arm runs deterministic stub
+#    backends and makes no LLM call at all, so it never faces an extraction
+#    decision; the mem0 arm runs mem0's LLM extraction. The aggregate
+#    pass counts are therefore NOT an apples-to-apples extraction comparison —
+#    they compare a rule-based pipeline on its own lexicon against an LLM
+#    pipeline on someone else's.
+#
+# What the head-to-head does support is the architectural rows: whether a
+# retired value stays queryable, and whether a point-in-time read exists.
+# ---------------------------------------------------------------------------
+
+MEM0_INSTALL_HINT = (
+    "mem0 is not installed — install it with: "
+    'pip install mem0ai[extras] mem0ai[nlp] '
+    "(the extras enable mem0's BM25 + entity-boost retrieval halves; without "
+    "them the arm measures a handicapped mem0)")
+
+
+def _import_mem0():
+    """Import the mem0 package. Raises ImportError when it is absent."""
+    import importlib
+
+    return importlib.import_module("mem0")
+
+
+@contextmanager
+def _time_budget(seconds: int | None):
+    """Wall-clock budget for one scenario (POSIX main thread; falsy disables).
+
+    A stalled scenario becomes a FAIL row with the elapsed budget in its
+    Detail instead of killing the whole run.
+    """
+    if not seconds or not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def _fire(signum, frame):  # pragma: no cover - timing dependent
+        raise TimeoutError(f"scenario exceeded the {seconds}s budget")
+
+    try:
+        previous = signal.signal(signal.SIGALRM, _fire)
+    except ValueError:  # not the main thread
+        yield
+        return
+    signal.alarm(int(seconds))
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def _optional_extra(module: str, distribution: str) -> str | None:
+    """Version of an installed optional dependency, or None when it is absent.
+
+    Uses `find_spec` + distribution metadata so the probe never imports (and
+    never triggers a model download) just to answer the question.
+    """
+    if importlib.util.find_spec(module) is None:
+        return None
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:  # pragma: no cover
+        return "unknown"
+
+
+def mem0_retrieval_extras() -> str:
+    """Pin the optional mem0 extras that silently change how mem0 retrieves.
+
+    mem0 2.x does not rank on embeddings alone: `_search_vector_store` scores
+    `semantic + BM25 + entity-boost` (mem0/memory/main.py). Both non-semantic
+    halves are opt-in extras that fail *quietly* — a `logger.warning` and
+    nothing in the results:
+
+    - no `fastembed` → the Qdrant store's `keyword_search()` returns None, so
+      `bm25_scores` is empty for every query and mem0's keyword half is off;
+    - no `spacy` (+ the `en_core_web_sm` model) → the query is not lemmatised
+      and `extract_entities()` yields nothing, so entity boosts are empty.
+
+    A run against a mem0 missing these is a run against a materially different
+    retriever, so the state belongs in the pinned header rather than in the
+    reader's assumptions.
+    """
+    fastembed = _optional_extra("fastembed", "fastembed")
+    spacy = _optional_extra("spacy", "spacy")
+    model = importlib.util.find_spec("en_core_web_sm") is not None
+    bm25 = f"hybrid_bm25=on (fastembed {fastembed})" if fastembed \
+        else "hybrid_bm25=OFF (fastembed missing — mem0's keyword half disabled)"
+    if spacy and model:
+        nlp = f"lemmatizer+entity_boost=on (spacy {spacy} + en_core_web_sm)"
+    elif spacy:
+        nlp = f"lemmatizer+entity_boost=OFF (spacy {spacy}, en_core_web_sm missing)"
+    else:
+        nlp = "lemmatizer+entity_boost=OFF (spacy missing)"
+    return f"{bm25}, {nlp}"
+
+
+@dataclass(frozen=True)
+class Mem0Config:
+    """Exactly what the mem0 arm was configured with — pinned in the header."""
+
+    llm_provider: str = "ollama"
+    llm_model: str = "qwen2.5:3b"
+    embedder_provider: str = "ollama"
+    embedder_model: str = "nomic-embed-text"
+    embedding_dims: int = 768
+    ollama_base_url: str = "http://localhost:11434"
+    vector_store: str = "qdrant"
+    # Sampling. mem0's ollama path forwards exactly temperature, top_p and
+    # num_predict (=max_tokens) and no seed (mem0/llms/ollama.py), so these
+    # are the only decoding knobs a reader can re-derive the run from. They
+    # are pinned here rather than hard-coded inside `memory_config`.
+    # `top_p`/`max_tokens` restate mem0's own BaseLlmConfig defaults, so the
+    # emitted numbers describe the run without changing it.
+    temperature: float = 0.0
+    top_p: float = 0.1
+    max_tokens: int = 2000
+    # mem0 `search()` knobs. Passed explicitly (not left as mem0 defaults) so
+    # the header describes the call that was actually made.
+    search_threshold: float = 0.1
+    search_rerank: bool = False
+
+    def label(self) -> str:
+        return (
+            f"llm={self.llm_provider}/{self.llm_model}, "
+            f"embedder={self.embedder_provider}/{self.embedder_model} "
+            f"({self.embedding_dims}d), "
+            f"vector_store={self.vector_store} (local, on-disk), "
+            f"ollama_base_url={self.ollama_base_url}, "
+            f"temperature={self.temperature}, top_p={self.top_p}, "
+            f"max_tokens={self.max_tokens}, no seed, "
+            f"search(threshold={self.search_threshold}, "
+            f"rerank={self.search_rerank}), "
+            f"{mem0_retrieval_extras()}"
+        )
+
+
+class Mem0Arm:
+    """Runs `SCENARIOS` against mem0's public API.
+
+    Mapping: `Step.text` → `mem0.Memory.add`, `Scenario.query` → mem0 search,
+    one mem0 session id (`user_id`) per scenario, one on-disk store per
+    scenario. Retirement is read from the live set plus `Memory.history()`,
+    which is mem0's own record of an UPDATE/DELETE.
+    """
+
+    def __init__(self, mem0_module, config: Mem0Config | None = None,
+                 timeout: int | None = 600, progress=None):
+        self._mem0 = mem0_module
+        self.config = config or Mem0Config()
+        self.timeout = timeout
+        self._progress = progress
+        self._timestamp_supported: bool | None = None
+        self._timestamp_error: str | None = None
+        self._reference_date_supported: bool | None = None
+        self._reference_date_error: str | None = None
+        # Which call shape the installed mem0 uses; decided once by signature
+        # inspection, never by catching a TypeError from the call itself.
+        self._search_is_2x: bool | None = None
+        self._get_all_is_2x: bool | None = None
+
+    # -- identity -----------------------------------------------------------
+
+    @property
+    def version(self) -> str:
+        return str(getattr(self._mem0, "__version__", "unknown"))
+
+    def header(self, python_version: str) -> str:
+        return (
+            f"# Update-integrity results — mem0 {self.version} "
+            f"({self.config.label()}, Python {python_version})\n\n"
+            "*Same scenarios and same assertion names as the lean-memory arm. "
+            "`n/a (unsupported)` marks an assertion with no equivalent in this "
+            "library's public API (probed at runtime — the library's own refusal "
+            "is quoted in Detail); those rows are excluded from the PASS tally.*"
+        )
+
+    # -- plumbing -----------------------------------------------------------
+
+    def _note(self, message: str) -> None:
+        if self._progress is not None:
+            print(message, file=self._progress, flush=True)
+
+    def memory_config(self, root: Path, ns: str) -> dict:
+        llm_cfg: dict = {"model": self.config.llm_model,
+                         "temperature": self.config.temperature,
+                         "top_p": self.config.top_p,
+                         "max_tokens": self.config.max_tokens}
+        emb_cfg: dict = {"model": self.config.embedder_model,
+                         "embedding_dims": self.config.embedding_dims}
+        if self.config.llm_provider == "ollama":
+            llm_cfg["ollama_base_url"] = self.config.ollama_base_url
+        if self.config.embedder_provider == "ollama":
+            emb_cfg["ollama_base_url"] = self.config.ollama_base_url
+        return {
+            "llm": {"provider": self.config.llm_provider, "config": llm_cfg},
+            "embedder": {"provider": self.config.embedder_provider, "config": emb_cfg},
+            "vector_store": {
+                "provider": self.config.vector_store,
+                "config": {
+                    "collection_name": f"wp2_{ns}",
+                    "path": str(root / "qdrant"),
+                    "embedding_model_dims": self.config.embedding_dims,
+                    "on_disk": True,
+                },
+            },
+            "history_db_path": str(root / "mem0-history.db"),
+        }
+
+    def _open(self, root: Path, ns: str):
+        return self._mem0.Memory.from_config(self.memory_config(root, ns))
+
+    @staticmethod
+    def _close(client) -> None:
+        """Best-effort teardown so a reopen can take the on-disk store's lock."""
+        targets = [getattr(getattr(client, "vector_store", None), "client", None),
+                   getattr(client, "db", None)]
+        for target in targets:
+            close = getattr(target, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:  # pragma: no cover - teardown is advisory
+                    pass
+
+    @staticmethod
+    def _items(response) -> list[dict]:
+        if isinstance(response, dict):
+            response = response.get("results", [])
+        if not isinstance(response, (list, tuple)):
+            return []
+        return [item for item in response if isinstance(item, dict)]
+
+    @staticmethod
+    def _text(item: dict) -> str:
+        for key in ("memory", "text", "data"):
+            value = item.get(key)
+            if value:
+                return str(value)
+        return ""
+
+    @staticmethod
+    def _iso(epoch_ms: int) -> str:
+        return datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc).isoformat()
+
+    # -- mem0 calls ---------------------------------------------------------
+
+    def _add(self, client, ns: str, step: Step) -> list[dict]:
+        """`Step.text` → mem0 add, carrying `Step.t` when mem0 accepts it."""
+        if self._timestamp_supported is not False:
+            try:
+                items = self._items(
+                    client.add(step.text, user_id=ns, timestamp=self._iso(step.t)))
+                self._timestamp_supported = True
+                return items
+            except (ValueError, TypeError) as exc:
+                self._timestamp_supported = False
+                self._timestamp_error = f"{type(exc).__name__}: {exc}"
+        return self._items(client.add(step.text, user_id=ns))
+
+    @staticmethod
+    def _accepts(fn, name: str) -> bool:
+        """Does `fn` declare parameter `name`? (False when uninspectable.)
+
+        Signature inspection — not `except TypeError` around the call — is what
+        chooses the 2.x vs pre-2.0 shape. A blanket `except TypeError` would
+        also swallow a genuine TypeError raised deep inside mem0's search path
+        (vector store, embedder, scorer) and re-raise the legacy call's error
+        instead, masking the real cause in a published Detail cell.
+        """
+        try:
+            return name in inspect.signature(fn).parameters
+        except (TypeError, ValueError):  # pragma: no cover - C-level callables
+            return False
+
+    def _search(self, client, ns: str, query: str, k: int, **extra) -> list[dict]:
+        if self._search_is_2x is None:
+            self._search_is_2x = self._accepts(client.search, "filters")
+        if self._search_is_2x:
+            return self._items(client.search(
+                query, filters={"user_id": ns}, top_k=k,
+                threshold=self.config.search_threshold,
+                rerank=self.config.search_rerank, **extra))
+        return self._items(client.search(query, user_id=ns, limit=k, **extra))
+
+    def _get_all(self, client, ns: str, k: int) -> list[dict]:
+        if self._get_all_is_2x is None:
+            self._get_all_is_2x = self._accepts(client.get_all, "filters")
+        if self._get_all_is_2x:
+            return self._items(client.get_all(filters={"user_id": ns}, top_k=k))
+        return self._items(client.get_all(user_id=ns, limit=k))
+
+    def _history(self, client, memory_id: str) -> list[dict]:
+        try:
+            return self._items(client.history(memory_id))
+        except Exception:
+            return []
+
+    # -- assertions ---------------------------------------------------------
+
+    def _retired_assertion(self, client, ns: str, scenario: Scenario,
+                           seen_ids: list[str], ingest: str) -> AssertionResult:
+        needle = scenario.expect_retired_contains or ""
+        live_items = self._get_all(client, ns, 50)
+        # Every live memory is checked, top-1 included: in this arm top-1 is
+        # not guaranteed to be the current fact (see `_carries_retired_value`),
+        # so excluding it by identity would both misattribute the failure and
+        # let a stale top-1 score a false PASS.
+        still_live = [self._text(item) for item in live_items
+                      if _carries_retired_value(self._text(item), scenario)]
+        if still_live:
+            return AssertionResult(
+                "old-fact-retired", False,
+                f"old value is still a current memory in mem0: {still_live!r}")
+        # Sweep the history of every memory the run touched OR that is still
+        # live. Restricting this to ids echoed back by `add()` would turn a
+        # retirement mem0 performed without naming the id in its add response
+        # into a bogus "no retirement record" FAIL — an adapter blind spot
+        # reported as an observation about mem0.
+        ids = list(seen_ids)
+        for item in live_items:
+            memory_id = item.get("id")
+            if memory_id and str(memory_id) not in ids:
+                ids.append(str(memory_id))
+        evidence: list[str] = []
+        for memory_id in ids:
+            for row in self._history(client, memory_id):
+                event = str(row.get("event", "")).upper()
+                old = str(row.get("old_memory") or row.get("prev_value") or "")
+                new = str(row.get("new_memory") or row.get("new_value") or "")
+                if event in ("UPDATE", "DELETE") and (
+                        _contains(needle, old) or _contains(needle, new)):
+                    evidence.append(f"{event} {memory_id}: old={old!r} new={new!r}")
+        if evidence:
+            return AssertionResult("old-fact-retired", True, "; ".join(evidence))
+        return AssertionResult(
+            "old-fact-retired", False,
+            f"no retirement record for {needle!r}: it is absent from the live set and "
+            f"no UPDATE/DELETE row in mem0's history carries it ({ingest})")
+
+    def _reference_date_ok(self, client, ns: str, query: str) -> bool:
+        """Probe mem0 for a point-in-time read (`as_of`) once per run."""
+        if self._reference_date_supported is None:
+            try:
+                self._search(client, ns, query, 1,
+                             reference_date="1970-01-01T00:00:00+00:00")
+                self._reference_date_supported = True
+            except Exception as exc:
+                self._reference_date_supported = False
+                self._reference_date_error = f"{type(exc).__name__}: {exc}"
+        return bool(self._reference_date_supported)
+
+    def _as_of_assertion(self, client, ns: str, scenario: Scenario) -> AssertionResult:
+        name = "as-of-returns-old-truth"
+        if not self._reference_date_ok(client, ns, scenario.query):
+            return AssertionResult(
+                name, False,
+                f"mem0 {self.version} has no point-in-time read: "
+                f"search(reference_date=…) → {self._reference_date_error}; "
+                f"add(timestamp=…) → {self._timestamp_error or 'accepted'}",
+                supported=False)
+        hits = self._search(client, ns, scenario.query, 10,
+                            reference_date=self._iso(scenario.as_of or 0))
+        top1 = self._text(hits[0]) if hits else "<no results>"
+        return AssertionResult(
+            name, _contains(scenario.expect_as_of_top1_contains or "", top1),
+            f"expected {scenario.expect_as_of_top1_contains!r} in as-of top-1, "
+            f"got {top1!r}")
+
+    # -- driver -------------------------------------------------------------
+
+    def run_scenario(self, scenario: Scenario, root: Path) -> list[AssertionResult]:
+        started = time.monotonic()
+        self._note(f"[mem0] {scenario.key}: start")
+        try:
+            with _time_budget(self.timeout):
+                results = self._run(scenario, root)
+        except Exception as exc:
+            results = self._error_rows(scenario, f"{type(exc).__name__}: {exc}")
+        self._note(f"[mem0] {scenario.key}: {time.monotonic() - started:.1f}s "
+                   + " ".join(f"{r.name}="
+                              + ("error" if r.error else
+                                 "n/a" if not r.supported else str(r.ok))
+                              for r in results))
+        return results
+
+    def _error_rows(self, scenario: Scenario, detail: str) -> list[AssertionResult]:
+        """Keep the table aligned when a scenario blows up or times out.
+
+        These rows are marked `error`: a SIGALRM timeout or a dead LLM backend
+        is not mem0 answering wrongly, so counting them as FAILs would inflate
+        the published denominator with infrastructure noise. They are excluded
+        from both sides of the tally, surfaced in their own summary line, and
+        still force a non-zero exit.
+        """
+        rows = []
+        for name in assertion_names(scenario):
+            unsupported = (name == "as-of-returns-old-truth"
+                           and self._reference_date_supported is False)
+            rows.append(AssertionResult(
+                name, False,
+                self._reference_date_error if unsupported else detail,
+                supported=not unsupported,
+                error=not unsupported))
+        return rows
+
+    def _run(self, scenario: Scenario, root: Path) -> list[AssertionResult]:
+        ns = scenario.key
+        client = self._open(root, ns)
+        try:
+            seen_ids: list[str] = []
+            events: list[str] = []
+            for step in scenario.steps:
+                items = self._add(client, ns, step)
+                self._note(f"[mem0]   add {step.text!r} -> "
+                           + (", ".join(f"{i.get('event')} {self._text(i)!r}"
+                                        for i in items) or "no memory extracted"))
+                events.extend(str(i.get("event", "?")).upper() for i in items)
+                for item in items:
+                    memory_id = item.get("id")
+                    if memory_id and str(memory_id) not in seen_ids:
+                        seen_ids.append(str(memory_id))
+            ingest = (f"mem0's LLM emitted {len(events)} memory event(s) "
+                      f"[{', '.join(events) or 'none'}] across "
+                      f"{len(scenario.steps)} add() call(s)")
+            if scenario.reopen:
+                self._close(client)
+                client = self._open(root, ns)
+
+            out: list[AssertionResult] = []
+            latest = self._search(client, ns, scenario.query, 10)
+            texts = [self._text(item) for item in latest]
+            top1 = texts[0] if texts else "<no results>"
+            out.append(AssertionResult(
+                "top1-is-current",
+                _contains(scenario.expect_top1_contains, top1),
+                f"expected {scenario.expect_top1_contains!r} in top-1, got {top1!r} "
+                f"({ingest})",
+            ))
+
+            if scenario.expect_retired_contains is not None:
+                out.append(
+                    self._retired_assertion(client, ns, scenario, seen_ids, ingest))
+
+            if scenario.as_of is not None and scenario.expect_as_of_top1_contains is not None:
+                out.append(self._as_of_assertion(client, ns, scenario))
+
+            if scenario.expect_all_latest_contain is not None:
+                missing = [s for s in scenario.expect_all_latest_contain
+                           if not any(_contains(s, t) for t in texts)]
+                ok = not missing and len(texts) == len(scenario.expect_all_latest_contain)
+                out.append(AssertionResult(
+                    "latest-set-exact",
+                    ok,
+                    f"latest={texts!r} "
+                    f"expected-substrings={scenario.expect_all_latest_contain!r} "
+                    f"({ingest})",
+                ))
+            return out
+        finally:
+            self._close(client)
+
+
+def emit(rows: list[tuple[str, list[AssertionResult]]], header: str,
+         markdown: bool) -> bool:
+    """Render the results table; returns True when every graded assertion passed.
+
+    Three row states, only the first of which is graded: PASS/FAIL (an engine
+    answer), `n/a (unsupported)` (the arm's API has no equivalent), and
+    `error (harness)` (the scenario never produced an answer — timeout or an
+    uncaught exception). Both ungraded states are excluded from the tally and
+    reported in their own summary line; an error still fails the run.
+    """
+    errors = [r for _, results in rows for r in results if r.error]
+    graded = [r for _, results in rows for r in results
+              if r.supported and not r.error]
+    unsupported = [r for _, results in rows for r in results
+                   if not r.supported and not r.error]
+    all_ok = all(r.ok for r in graded) and not errors
+    if markdown:
+        print(header + "\n")
+        print("| Scenario | Assertion | Result | Detail |")
+        print("|---|---|---|---|")
+        for key, results in rows:
+            for r in results:
+                if r.error:
+                    status = "error (harness)"
+                elif not r.supported:
+                    status = "n/a (unsupported)"
+                else:
+                    status = "PASS" if r.ok else "FAIL"
+                detail = ("" if (r.ok and r.supported and not r.error)
+                          else r.detail.replace("|", "\\|"))
+                print(f"| {key} | {r.name} | {status} | {detail} |")
+        summary = (f"\n**{'ALL PASS' if all_ok else 'FAILURES PRESENT'}** — "
+                   f"{sum(r.ok for r in graded)}/{len(graded)} assertions.")
+        if unsupported:
+            summary += (f" {len(unsupported)} further assertion(s) rendered "
+                        f"`n/a (unsupported)` — no equivalent in this arm's API, "
+                        f"excluded from the tally.")
+        if errors:
+            summary += (f" {len(errors)} assertion(s) rendered `error (harness)` "
+                        f"— the scenario never produced an answer (timeout or "
+                        f"uncaught exception), excluded from the tally.")
+        print(summary)
+    else:
+        for key, results in rows:
+            for r in results:
+                if r.error:
+                    print(f"{key:32s} {r.name:28s} error {r.detail}")
+                elif not r.supported:
+                    print(f"{key:32s} {r.name:28s} n/a   {r.detail}")
+                else:
+                    print(f"{key:32s} {r.name:28s} {'PASS' if r.ok else 'FAIL  ' + r.detail}")
+    return all_ok
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
+    import os
     import platform
     import tempfile
 
@@ -231,37 +847,57 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--markdown", action="store_true", help="emit a markdown results table")
     ap.add_argument("--root", default=None,
                     help="directory for scenario stores (default: a temp dir per scenario)")
+    ap.add_argument("--arm", choices=("lean-memory", "mem0"), default="lean-memory",
+                    help="engine under test (default: lean-memory)")
+    ap.add_argument("--mem0-llm-provider", default=Mem0Config.llm_provider)
+    ap.add_argument("--mem0-llm-model", default=Mem0Config.llm_model)
+    ap.add_argument("--mem0-embedder-provider", default=Mem0Config.embedder_provider)
+    ap.add_argument("--mem0-embedder-model", default=Mem0Config.embedder_model)
+    ap.add_argument("--mem0-embedding-dims", type=int, default=Mem0Config.embedding_dims)
+    ap.add_argument("--mem0-ollama-base-url", default=Mem0Config.ollama_base_url)
+    ap.add_argument("--mem0-timeout", type=int, default=600,
+                    help="mem0 arm: per-scenario wall-clock budget in seconds (0 disables)")
     args = ap.parse_args(argv)
+
+    if args.arm == "mem0":
+        # mem0 OSS ships telemetry on by default; the benchmark never phones home.
+        os.environ.setdefault("MEM0_TELEMETRY", "false")
+        try:
+            mem0 = _import_mem0()
+        except ImportError as exc:
+            print(f"{MEM0_INSTALL_HINT} ({exc})", file=sys.stderr)
+            return 2
+        arm = Mem0Arm(
+            mem0,
+            Mem0Config(
+                llm_provider=args.mem0_llm_provider,
+                llm_model=args.mem0_llm_model,
+                embedder_provider=args.mem0_embedder_provider,
+                embedder_model=args.mem0_embedder_model,
+                embedding_dims=args.mem0_embedding_dims,
+                ollama_base_url=args.mem0_ollama_base_url,
+            ),
+            timeout=args.mem0_timeout,
+            progress=sys.stderr,
+        )
+        runner = arm.run_scenario
+        header = arm.header(platform.python_version())
+    else:
+        runner = run_scenario
+        header = (f"# Update-integrity results — lean-memory {__version__} "
+                  f"(offline stub backends, Python {platform.python_version()})")
 
     rows: list[tuple[str, list[AssertionResult]]] = []
     for sc in SCENARIOS:
         if args.root:
             root = Path(args.root) / sc.key
             root.mkdir(parents=True, exist_ok=True)
-            rows.append((sc.key, run_scenario(sc, root)))
+            rows.append((sc.key, runner(sc, root)))
         else:
             with tempfile.TemporaryDirectory() as td:
-                rows.append((sc.key, run_scenario(sc, Path(td))))
+                rows.append((sc.key, runner(sc, Path(td))))
 
-    all_ok = all(r.ok for _, results in rows for r in results)
-    if args.markdown:
-        print(f"# Update-integrity results — lean-memory {__version__} "
-              f"(offline stub backends, Python {platform.python_version()})\n")
-        print("| Scenario | Assertion | Result | Detail |")
-        print("|---|---|---|---|")
-        for key, results in rows:
-            for r in results:
-                status = "PASS" if r.ok else "FAIL"
-                detail = "" if r.ok else r.detail.replace("|", "\\|")
-                print(f"| {key} | {r.name} | {status} | {detail} |")
-        print(f"\n**{'ALL PASS' if all_ok else 'FAILURES PRESENT'}** — "
-              f"{sum(r.ok for _, res in rows for r in res)}/"
-              f"{sum(len(res) for _, res in rows)} assertions.")
-    else:
-        for key, results in rows:
-            for r in results:
-                print(f"{key:32s} {r.name:28s} {'PASS' if r.ok else 'FAIL  ' + r.detail}")
-    return 0 if all_ok else 1
+    return 0 if emit(rows, header, args.markdown) else 1
 
 
 if __name__ == "__main__":
