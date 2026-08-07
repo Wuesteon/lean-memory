@@ -284,7 +284,32 @@ _EXPLICIT_RELATIONS: frozenset[str] = frozenset(
 
 # First-person markers → the candidate subject is the configured default subject (the user),
 # matching RulesExtractor's behaviour so stub and rules agree on "I/my/me" → "user".
-_FIRST_PERSON = re.compile(r"\b(?:I|I'm|my|me|mine)\b")
+#
+# re.I since WP15 (issue #14): without it a chat user's lowercase "i work at acme."
+# missed this pattern, fell through to the Capitalized-run/lead-token fallback in
+# _subject(), and produced an entity literally named 'i' — a split from 'user' that
+# no amount of store-side name collation can heal, because the two names are
+# genuinely different strings.
+#
+# Two consequences, both deliberate:
+#  1. It is not a pure bugfix. my/me/mine are already lowercase here, so the flag
+#     also admits 'ME', 'Mine', 'MY' and a BARE 'i' anywhere in the sentence —
+#     "Mine uses explosives." now attributes to 'user'. That false-merge class is
+#     pinned in tests/test_phase1_extraction.py; see the WP15 decision doc §3.5.
+#  2. It also shifts offline ROUTING: `explicit = first_person and relation in
+#     _EXPLICIT_RELATIONS` below, so lowercase-'i' sentences become high-confidence
+#     and route `direct` instead of escalating. No published calibration number
+#     moves (those were measured on the real GLiNER2 backbone, not this stub), but
+#     any FUTURE offline escalation measurement shifts.
+#
+# Divergence from rules.py:36 (`\b(I|I'm|I am|my|me|mine)\b`, re.I), stated rather
+# than cargo-culted: the `I am` alternative is NOT carried over because it is
+# unreachable. Alternation is leftmost-first, so wherever "I am" would match, the
+# earlier `I` alternative already matches (the `\b` after `I` holds before a
+# space), and both patterns are only ever used as a boolean `.search()`. Adding it
+# would imply a behavioral difference that does not exist. The only real
+# difference left is the non-capturing group, which this pattern does not need.
+_FIRST_PERSON = re.compile(r"\b(?:I|I'm|my|me|mine)\b", re.I)
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
 # A "named entity" heuristic: a (possibly multi-word) Capitalized run, e.g. "Acme", "San Francisco".
 _CAP_RUN = re.compile(r"\b[A-Z][\w.&-]*(?:\s+[A-Z][\w.&-]*)*")

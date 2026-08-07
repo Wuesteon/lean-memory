@@ -23,9 +23,16 @@ from typing import Iterator, Optional, Sequence
 import numpy as np
 from sqlite_vec import serialize_float32
 
+from ..normalize import entity_key
 from ..types import Entity, Episode, Fact, new_id
 from .base import Store
 from .schema import SCHEMA_SQL
+
+
+# Current persisted-format version. Bump it together with a new
+# `if version < N:` branch in _init_schema — it is the outer guard that decides
+# whether an open needs the migration transaction at all.
+SCHEMA_VERSION = 3
 
 
 def _serialize(vec: np.ndarray) -> bytes:
@@ -113,30 +120,85 @@ class SqliteStore(Store):
         sql = SCHEMA_SQL.format(dim=self.dim, coarse_dim=self.coarse_dim)
         self._db.executescript(sql)
 
+        # ── Versioned migrations, all inside ONE explicit transaction.
+        #
         # Schema-version stamp — the migration anchor for future releases.
         # Version 1 == the 0.1.x layout; pre-stamp files (0.1.0–0.1.2, version 0)
         # have an identical spine and are treated as version 1. Never write over a
-        # NEWER release's stamp.
-        version = self._db.execute("PRAGMA user_version").fetchone()[0]
-        if version == 0:
-            version = 1
-            self._db.execute("PRAGMA user_version = 1")
+        # NEWER release's stamp. Each branch below runs the NON-idempotent DDL for
+        # its version exactly once, keyed off user_version. A fresh DB is version 1
+        # here (stamped just inside), so it flows through the SAME branches and
+        # gains record_kind AND name_key via the SAME ALTERs — there is no separate
+        # fresh path. ADD COLUMN is not idempotent (raises 'duplicate column name'
+        # on reopen), so it MUST live here and never in the always-run blob.
+        #
+        # The explicit BEGIN IMMEDIATE is load-bearing, not decoration. Python's
+        # sqlite3 opens an implicit transaction for DML only — NEVER for DDL — so
+        # without it an `ALTER TABLE ... ADD COLUMN` runs in autocommit and is
+        # durable the instant it executes, while the backfill / index / version
+        # stamp that make it coherent commit later. Interrupt that window and the
+        # file keeps the new column under the OLD user_version; every later open
+        # then re-enters the branch and dies on 'duplicate column name' —
+        # permanently unopenable, no recovery short of manual sqlite surgery.
+        # (SQLite's own DDL is transactional; it is Python's autocommit heuristic,
+        # not SQLite, that would strand the ALTER outside a transaction.)
+        # Re-reading user_version under the write lock closes the sibling race:
+        # two processes opening one pre-v3 file both read the old version, and
+        # without the re-read the loser repeats the ALTER. The outer guard keeps
+        # the common already-current open lock-free.
+        if self._db.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                version = self._db.execute("PRAGMA user_version").fetchone()[0]
+                if version == 0:
+                    version = 1
+                    self._db.execute("PRAGMA user_version = 1")
 
-        # ── Versioned migrations. Each branch runs the NON-idempotent DDL for its
-        # version exactly once, keyed off user_version. A fresh DB is version 1
-        # here (just stamped above), so it flows through the same `< 2` branch and
-        # gains record_kind via the SAME ALTER — there is no separate fresh path.
-        # ADD COLUMN is not idempotent (raises 'duplicate column name' on reopen),
-        # so it MUST live here and never in the always-run blob.
-        if version < 2:
-            self._db.execute(
-                "ALTER TABLE fact ADD COLUMN record_kind TEXT NOT NULL "
-                "DEFAULT 'fact'"  # 'fact'|'summary'
-            )
-            self._db.execute("PRAGMA user_version = 2")
-            version = 2
+                if version < 2:
+                    self._db.execute(
+                        "ALTER TABLE fact ADD COLUMN record_kind TEXT NOT NULL "
+                        "DEFAULT 'fact'"  # 'fact'|'summary'
+                    )
+                    self._db.execute("PRAGMA user_version = 2")
+                    version = 2
 
-        self._db.commit()
+                # v3 — entity name collation (WP15). ADD-only and forward-fix: the
+                # backfill writes the derived key onto existing rows and touches
+                # nothing else. No row is deleted, no fact is re-pointed, no
+                # validity interval moves, so the as-of surface is byte-identical
+                # across the migration. Pre-existing case-split rows ('Acme' +
+                # 'ACME') are NOT healed — both keep their facts; upsert_entity's
+                # tie-break just converges new mentions on the oldest. (Healing
+                # means re-pointing fact.subject_id, a new mutation verb and its
+                # own decision — deferred to a possible merge_entity review
+                # proposal.)
+                # The backfill is a Python loop by necessity: SQLite has no
+                # casefold(); `lower()` is ASCII-only and would silently mis-key
+                # every non-ASCII name. The table holds one row per distinct
+                # subject. The CREATE INDEX belongs here, NOT in SCHEMA_SQL, for
+                # the same reason as the ALTER (see schema.py).
+                if version < 3:
+                    self._db.execute(
+                        "ALTER TABLE entity ADD COLUMN name_key TEXT NOT NULL "
+                        "DEFAULT ''"
+                    )
+                    for row in self._db.execute(
+                        "SELECT id, name FROM entity"
+                    ).fetchall():
+                        self._db.execute(
+                            "UPDATE entity SET name_key=? WHERE id=?",
+                            (entity_key(row["name"]), row["id"]),
+                        )
+                    self._db.execute(
+                        "CREATE INDEX IF NOT EXISTS ix_entity_key "
+                        "ON entity(namespace, name_key, type)"
+                    )
+                    self._db.execute("PRAGMA user_version = 3")
+                    version = 3
+            except BaseException:
+                self._db.rollback()
+                raise
+            self._db.commit()
 
     def _check_existing_dims(self) -> None:
         """Refuse to open a store whose vec0 table was created for a different embedder.
@@ -181,17 +243,38 @@ class SqliteStore(Store):
 
     # ── entities ──
     def upsert_entity(self, entity: Entity) -> Entity:
+        """Resolve-or-create on the NORMALIZED key (schema v3, WP15).
+
+        The lookup keys on `(namespace, name_key, type)`, not the raw surface
+        form: under SQLite's default BINARY collation 'Acme' and 'ACME' were two
+        identities, so one real-world subject got two `subject_id`s — and because
+        the whole spine is keyed on `(subject_id, predicate)`, the restatement
+        skip and contradiction resolution were never even consulted for the
+        second one. `type` stays in the key (Mercury/person vs Mercury/planet).
+
+        The INSERT stores the surface form verbatim in `name` — the FIRST-seen
+        spelling wins the display, and later variants resolve onto it rather than
+        rewriting it. ADD-only: a resolve never updates an existing row.
+
+        `ORDER BY created_at, id LIMIT 1` is the tie-break for legacy split rows
+        (a store written before v3 can hold several rows sharing one name_key;
+        the migration backfills but never heals). Oldest row wins — deterministic
+        and policy-free, so new mentions converge on the identity that already
+        owns the history. A store written entirely after v3 never has a tie.
+        """
         row = self._db.execute(
-            "SELECT * FROM entity WHERE namespace=? AND name=? AND IFNULL(type,'')=IFNULL(?,'')",
-            (entity.namespace, entity.name, entity.type),
+            "SELECT * FROM entity "
+            "WHERE namespace=? AND name_key=? AND IFNULL(type,'')=IFNULL(?,'') "
+            "ORDER BY created_at, id LIMIT 1",
+            (entity.namespace, entity_key(entity.name), entity.type),
         ).fetchone()
         if row:
             return _row_to_entity(row)
         self._db.execute(
-            "INSERT INTO entity(id, namespace, name, type, summary, resolved_id, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (entity.id, entity.namespace, entity.name, entity.type,
-             entity.summary, entity.resolved_id, entity.created_at),
+            "INSERT INTO entity(id, namespace, name, name_key, type, summary, "
+            "resolved_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (entity.id, entity.namespace, entity.name, entity_key(entity.name),
+             entity.type, entity.summary, entity.resolved_id, entity.created_at),
         )
         self._commit()
         return entity

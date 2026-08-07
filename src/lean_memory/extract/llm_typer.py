@@ -38,6 +38,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
 
+from ..normalize import entity_key
+
 # ── Relation taxonomy + Candidate: the ONE cross-module contract. ──
 # taxonomy.py is the single source of truth for both the relation set and the
 # pre-typing `Candidate` shape. Pass 2 (gliner_extractor) emits canonical Candidates
@@ -179,10 +181,13 @@ class StubTyper(Typer):
       * an explicit inference cue in the surface text  → ``derives`` (is_inference=1)
       * everything else                                → ``asserts`` (is_inference=0)
 
-    It performs **no coreference resolution beyond identity**: a candidate's
-    ``subject_name`` is matched case-insensitively against ``known_entities`` and,
-    on an exact hit, ``subject_id`` is left as-is (already resolved) — it never
-    invents a link. ``supersedes``/``extends`` are intentionally NOT decided here:
+    It performs **no coreference resolution at all**: ``known_entities`` is
+    accepted for interface parity with the Ollama typer and deliberately IGNORED
+    — the stub passes every candidate's ``subject_name`` through untouched and
+    never invents a link. (Canonicalizing a resolved subject onto a known surface
+    form is the LLM path's job, ``OllamaTyper._apply_decisions``; entity identity
+    itself is decided once, in ``Store.upsert_entity``, on the shared normalized
+    key.) ``supersedes``/``extends`` are intentionally NOT decided here:
     those are a *slot-level* judgment (does the new object contradict the latest
     object in the same subject+predicate slot?) made by the cheap-then-escalate
     contradiction check in ``Memory.add`` (Pass 5), not by per-candidate typing.
@@ -411,7 +416,12 @@ class OllamaTyper(Typer):
         decisions: list[dict],
         known_entities: Optional[list[str]],
     ) -> list[TypedFact]:
-        known_lookup = {e.lower(): e for e in (known_entities or [])}
+        # Canonicalize on the SHARED entity key, not a local .lower(): the store
+        # resolves identity with exactly this fold (normalize.entity_key), so a
+        # second, weaker definition here would canonicalize onto a surface form
+        # the store then keys differently ('.lower()' misses ß→ss, ﬁ, and
+        # whitespace runs). One policy, one function.
+        known_lookup = {entity_key(e): e for e in (known_entities or [])}
         out: list[TypedFact] = []
         for c, d in zip(candidates, decisions):
             relation = _norm_relation(d.get("relation"))
@@ -421,8 +431,7 @@ class OllamaTyper(Typer):
             resolved = d.get("subject")
             subject_name = c.subject_name
             if isinstance(resolved, str) and resolved.strip():
-                key = resolved.strip().lower()
-                subject_name = known_lookup.get(key, resolved.strip())
+                subject_name = known_lookup.get(entity_key(resolved), resolved.strip())
             out.append(
                 TypedFact(
                     subject_name=subject_name,

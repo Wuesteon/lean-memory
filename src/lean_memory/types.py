@@ -41,7 +41,14 @@ class Episode:
 
 @dataclass
 class Entity:
-    """Canonical entity (person/org/place/...). Phase 0 resolves by (namespace, name, type)."""
+    """Canonical entity (person/org/place/...).
+
+    Resolved on `(namespace, normalize_text(name), type)` since schema v3 — see
+    `Store.upsert_entity` for the full contract. `name` is the FIRST-seen surface
+    form, kept verbatim for display; the derived key lives only in the store row's
+    `name_key` column and deliberately has no field here, so nothing can set it
+    out of step with `name`.
+    """
 
     namespace: str
     name: str

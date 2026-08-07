@@ -14,7 +14,6 @@ computed BEFORE any `store.batch()` window — a batch holds only row writes.
 from __future__ import annotations
 
 import json
-import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
@@ -22,6 +21,7 @@ from typing import Iterable, Optional
 import numpy as np
 
 from ..extract.contradiction import is_multivalued
+from ..normalize import normalize_text
 from ..store.base import Store
 from ..types import Fact
 from . import score
@@ -32,19 +32,11 @@ Slot = tuple[str, str]  # (subject_id, predicate)
 
 
 # ── value-preserving text normalization (DEDUP-EXACT, §4.1) ──────────────────
-def normalize_text(s: str) -> str:
-    """Value-PRESERVING normalization for exact-duplicate detection (§4.1).
-
-    NFC (canonical Unicode composition) + case-fold + whitespace collapse — and
-    NOTHING else. Never stemming, never synonyms: a lossy normalization could merge
-    genuinely distinct values ('salary 100k' vs 'salary 110k', 'likes jazz' vs
-    'likes blues') — the verified risk that makes DEDUP-EXACT safe to auto-apply.
-    Two texts share a normal form iff they are the same value written differently
-    (case / spacing / Unicode form).
-    """
-    nfc = unicodedata.normalize("NFC", s)
-    folded = nfc.casefold()
-    return " ".join(folded.split())
+# `normalize_text` is imported above, not defined here: it moved to
+# `lean_memory.normalize` when WP15 made entity identity (`entity.name_key`) use
+# the SAME fold. Two copies of a normalization is how the `_norm`/`normalize_text`
+# drift started; this module re-exports the one definition so WP10a's callers and
+# tests keep importing `maintain.transforms.normalize_text` unchanged.
 
 
 # ── reports (what each transform did / would do) ─────────────────────────────

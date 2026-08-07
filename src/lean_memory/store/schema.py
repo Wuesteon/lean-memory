@@ -19,6 +19,18 @@ CREATE TABLE IF NOT EXISTS episode (
 );
 
 -- ── ENTITY LAYER ────────────────────────────────────────────────────
+-- NOTE (schema v3): `name` is the FIRST-SEEN surface form, kept verbatim for
+-- display. Identity resolves on `entity.name_key` (NFC + casefold + whitespace
+-- collapse of `name`) via ix_entity_key. BOTH the name_key column and that index
+-- live ONLY in the versioned `if user_version < 3:` branch of _init_schema and
+-- must never appear here: this blob runs on EVERY open, so (a) an index over
+-- name_key here would reference a column a pre-v3 file does not have, and (b)
+-- declaring name_key in the table below would collide with the branch's ADD
+-- COLUMN on every FRESH store ('duplicate column name: name_key' — a fresh DB is
+-- stamped 1 and flows through the same branch). Same trap as fact.record_kind.
+-- (Keep DDL keywords out of these comment lines: the console's engine-schema
+-- tripwire, inspect_sql.compute_engine_schema_fingerprint, digests every line
+-- containing one, so a prose mention flips its hash with the DDL unchanged.)
 CREATE TABLE IF NOT EXISTS entity (
   id          TEXT PRIMARY KEY,
   namespace   TEXT NOT NULL,
@@ -28,6 +40,16 @@ CREATE TABLE IF NOT EXISTS entity (
   resolved_id TEXT,
   created_at  INTEGER NOT NULL
 );
+-- ix_entity_lookup below is VESTIGIAL as of v3 and retained on purpose. Nothing
+-- in the engine keys on `entity.name` any more: `upsert_entity` resolves on
+-- name_key via ix_entity_key, `memory.py`'s known-entity list is a namespace
+-- scan ordered newest-first, and the console's one name predicate
+-- (`LOWER(e.name) = LOWER(?)`) is non-sargable against it. So every entity row
+-- pays to maintain it and no read uses it. Retiring it is a deliberate
+-- cross-package call, not cleanup to slip into this packet: it needs a matching
+-- `DROP INDEX IF EXISTS` in the versioned branch AND an edit to the line below,
+-- which flips the console's engine-schema tripwire hash. Revisit alongside the
+-- console's own name_key adoption.
 CREATE INDEX IF NOT EXISTS ix_entity_lookup ON entity(namespace, name, type);
 
 -- ── FACT LAYER (monotemporal spine always on; audit axis opt-in) ─────

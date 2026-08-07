@@ -31,8 +31,23 @@ class Store(ABC):
     # ── entities ──
     @abstractmethod
     def upsert_entity(self, entity: Entity) -> Entity:
-        """Resolve-or-create. If an entity with the same (namespace, name, type)
-        exists, return it; otherwise insert `entity` and return it."""
+        """Resolve-or-create on the NORMALIZED name key (schema v3).
+
+        The identity key is `(namespace, normalize(name), type)`, where
+        `normalize` is `lean_memory.normalize.normalize_text` (NFC + Unicode
+        case-fold + whitespace collapse) — NOT the raw surface form. Every
+        implementation MUST use that function, not a local `.lower()`: an
+        ASCII-only fold silently splits 'Café'/'CAFÉ' and 'ЖУК'/'жук'.
+
+        If a matching entity exists, return it; otherwise insert `entity` and
+        return it. Two guarantees callers rely on:
+          - DISPLAY: the returned/stored `name` is the FIRST-seen surface form,
+            verbatim. Resolving a later case variant never rewrites it, and
+            nothing user-visible is lowercased.
+          - DETERMINISM: if several stored rows share one key (possible only on a
+            store written before v3, which is backfilled but never healed), the
+            OLDEST row wins — `ORDER BY created_at, id LIMIT 1`.
+        """
 
     @abstractmethod
     def get_entity(self, entity_id: str) -> Optional[Entity]: ...

@@ -3,18 +3,20 @@
 v0.1.0-0.1.2 shipped files with user_version=0 and no migration anchor; a schema
 change would have had no way to tell an old-but-valid file from a foreign SQLite
 database. Version 1 == the 0.1.x layout; version 2 == the sleep-time-maintenance
-layout (adds fact.record_kind + the maintenance tables). A fresh DB is stamped at
-the current version (2); older files migrate in place; a file stamped by a NEWER
-release is never downgraded.
+layout (adds fact.record_kind + the maintenance tables); version 3 == the entity
+name-collation layout (adds entity.name_key + ix_entity_key, WP15). A fresh DB is
+stamped at the current version (3); older files migrate in place; a file stamped
+by a NEWER release is never downgraded.
 
-The genuine v1-format-file → v2 upgrade path (incl. the ALTER-idempotence reopen
-trap) is pinned end-to-end in test_schema_migration.py against a checked-in
-v1-format fixture DB. This module pins the stamp arithmetic.
+The genuine old-format-file upgrade paths (v1→current and v2→current, incl. the
+ALTER-idempotence reopen trap) are pinned end-to-end in test_schema_migration.py
+against checked-in v1/v2-format fixture DBs. This module pins the stamp
+arithmetic.
 """
 
 from lean_memory.store.sqlite_store import SqliteStore
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def _user_version(store: SqliteStore) -> int:
